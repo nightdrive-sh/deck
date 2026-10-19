@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "A minimal Spotify player for the terminal, built around your own album shelf and a weekly AI-curated album list"
 license = "MIT"
-repository = "https://github.com/jarilehtinen/deck"
+repository = "https://github.com/nightdrive-sh/deck"
 
 [dependencies]
 anyhow = "1.0.104"

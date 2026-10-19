@@ -125,7 +125,7 @@ echo 'bitrate = 320' >> ~/.config/deck/config.toml
 ### 4. Build and install Deck
 
 ```sh
-git clone https://github.com/jarilehtinen/deck.git
+git clone https://github.com/nightdrive-sh/deck.git
 cd deck
 cargo install --locked --path .
 ```
@@ -287,7 +287,7 @@ For desktop launchers, `deck search --json <query>` and `deck artist-albums --js
 print artists and albums as JSON without a running Deck (they need `client_id`).
 Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
 `~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.
-[Nightdrive](https://github.com/jarilehtinen/nightdrive) uses all of these for its top bar and
+[Nightdrive](https://github.com/nightdrive-sh/nightdrive) uses all of these for its top bar and
 launcher.
 
 ## Setting up Curated (optional, recommended)
