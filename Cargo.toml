@@ -40,4 +40,6 @@ objc2-media-player = { version = "0.3", default-features = false, features = ["s
 
 # Linux: MPRIS (media keys, playerctl, panels) for Now Playing (`now_playing`).
 [target.'cfg(target_os = "linux")'.dependencies]
+# ALSA output (player::BACKEND): closes the device while nothing plays
+librespot-playback = { version = "0.8", features = ["alsa-backend"] }
 souvlaki = { version = "0.8", default-features = false, features = ["use_zbus"] }
