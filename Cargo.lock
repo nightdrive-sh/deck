@@ -868,6 +868,7 @@ dependencies = [
  "dispatch2",
  "env_logger",
  "jiff",
+ "libc",
  "librespot-core",
  "librespot-metadata",
  "librespot-oauth",
