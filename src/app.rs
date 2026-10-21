@@ -50,7 +50,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    catalog::{Album, Artist, LIKED_BATCH, SearchResults, Track},
+    catalog::{Album, Artist, LIKED_BATCH, SearchResults, Song, Track},
     genres::{self, Genre},
     lists::AlbumList,
     now_playing::{self, Command as MediaCommand},
@@ -330,7 +330,7 @@ pub struct SearchView {
     /// Cursor position in characters.
     pub cursor: usize,
     pub results: Option<SearchResults>,
-    /// Selection in the result list: artists first, then albums.
+    /// Selection in the result list: artists first, then albums, then songs.
     pub selected: usize,
     pub scroll: Scroll,
     /// Keys go to the result list instead of the search field: ↓ or Enter moves there,
@@ -346,6 +346,7 @@ pub struct SearchView {
 pub enum SearchItem<'a> {
     Artist(&'a Artist),
     Album(&'a Album),
+    Song(&'a Song),
 }
 
 /// The playing track as reported by the player.
@@ -583,7 +584,8 @@ pub struct State {
     rng: u64,
     /// Shown until the next action succeeds.
     pub error: Option<String>,
-    /// An album asked for by `deck ctl play-album`: it plays as soon as its tracks arrive.
+    /// An album asked for by `deck ctl play-album`, or a song's album from the search: it plays
+    /// as soon as its tracks arrive, from the track selected in its view (the song's, or the first).
     play_on_load: Option<String>,
 }
 
@@ -1045,7 +1047,7 @@ impl State {
                 View::Queue { .. } => self.queue_key(key),
                 View::Genres { .. } => self.genres_key(key),
                 View::Radio(_) => self.radio_key(key, now),
-                View::Search(_) => self.search_results_key(key),
+                View::Search(_) => self.search_results_key(key, now),
             },
         }
     }
@@ -1290,6 +1292,17 @@ impl State {
         playback.radio = None;
         playback.played.clear();
         self.now_playing = None;
+    }
+
+    /// A song from the search: its album opens with the song selected, and plays from it when
+    /// the tracks arrive (`album_tracks`), so the album goes on after the song.
+    fn play_song(&mut self, song: Song) -> Vec<Action> {
+        self.play_on_load = Some(song.album.uri.clone());
+        let actions = self.open_album(song.album);
+        if let Some(View::Album(view)) = self.views.last_mut() {
+            view.select_uri = Some(song.track.uri);
+        }
+        actions
     }
 
     /// Opens the album's track list without playing it. The tracks arrive as
@@ -1887,7 +1900,7 @@ impl State {
     }
 
     /// A key in the search results; the keys every view shares are handled already.
-    fn search_results_key(&mut self, key: Key) -> Vec<Action> {
+    fn search_results_key(&mut self, key: Key, now: Instant) -> Vec<Action> {
         let Some(View::Search(search)) = self.views.last_mut() else {
             return Vec::new();
         };
@@ -1913,18 +1926,30 @@ impl State {
                     let album = (*album).clone();
                     return self.open_album(album);
                 }
+                Some(SearchItem::Song(song)) => {
+                    let song = (*song).clone();
+                    return self.play_song(song);
+                }
                 None => {}
             },
-            Key::Ctrl('a') => {
-                if let Some(SearchItem::Album(album)) = search.items().get(search.selected) {
-                    return toggle_shelf(&self.shelf_uris, album);
+            Key::Ctrl('a') => match search.items().get(search.selected) {
+                Some(SearchItem::Album(album)) => return toggle_shelf(&self.shelf_uris, album),
+                Some(SearchItem::Song(song)) => {
+                    return toggle_shelf(&self.shelf_uris, &song.album);
                 }
-            }
-            Key::Ctrl('e') => {
-                if let Some(SearchItem::Album(album)) = search.items().get(search.selected) {
+                _ => {}
+            },
+            Key::Ctrl('e') => match search.items().get(search.selected) {
+                Some(SearchItem::Album(album)) => {
                     return vec![Action::QueueAlbum((*album).clone())];
                 }
-            }
+                Some(SearchItem::Song(song)) => {
+                    let track = song_queued(song);
+                    let name = track.name.clone();
+                    return self.enqueue(vec![track], &name, now);
+                }
+                _ => {}
+            },
             _ => {}
         }
         Vec::new()
@@ -1996,13 +2021,15 @@ impl State {
         if self.play_on_load.as_deref() == Some(uri) {
             self.play_on_load = None;
             let album = self.views.iter().rev().find_map(|view| match view {
-                View::Album(view) if view.album.uri == uri => Some(view.album.clone()),
+                View::Album(view) if view.album.uri == uri => {
+                    Some((view.album.clone(), view.selected))
+                }
                 _ => None,
             });
-            if let (Ok(tracks), Some(album)) = (&result, album)
+            if let (Ok(tracks), Some((album, track))) = (&result, album)
                 && !tracks.is_empty()
             {
-                actions.extend(self.play_album(album, tracks.len(), 0));
+                actions.extend(self.play_album(album, tracks.len(), track));
             }
         }
         match result {
@@ -2300,6 +2327,19 @@ fn queued(album: &Album, tracks: &[Track], index: usize) -> QueuedTrack {
     }
 }
 
+/// A song from the search to be added to the queue. Its place on the album is not known.
+fn song_queued(song: &Song) -> QueuedTrack {
+    QueuedTrack {
+        uri: song.track.uri.clone(),
+        name: song.track.name.clone(),
+        artist: song.track.artist.clone(),
+        duration: song.track.duration,
+        album_uri: song.album.uri.clone(),
+        index: None,
+        album: Some(Box::new(song.album.clone())),
+    }
+}
+
 /// A radio track to be added to the queue. The station does not report the duration, so
 /// it is zero (the queue view leaves it out).
 fn radio_queued(track: &radio::Track) -> QueuedTrack {
@@ -2376,7 +2416,7 @@ impl ArtistView {
 }
 
 impl SearchView {
-    /// The results as one list: artists first, then albums.
+    /// The results as one list: artists first, then albums, then songs.
     pub fn items(&self) -> Vec<SearchItem<'_>> {
         let Some(results) = &self.results else {
             return Vec::new();
@@ -2386,6 +2426,7 @@ impl SearchView {
             .iter()
             .map(SearchItem::Artist)
             .chain(results.albums.iter().map(SearchItem::Album))
+            .chain(results.songs.iter().map(SearchItem::Song))
             .collect()
     }
 
@@ -2551,12 +2592,27 @@ mod tests {
 
         /// Types a search, waits for the delay and returns the results.
         fn search(&mut self, text: &str, artists: Vec<Artist>, albums: Vec<Album>) {
+            self.search_all(text, artists, albums, vec![]);
+        }
+
+        /// As `search`, with songs too.
+        fn search_all(
+            &mut self,
+            text: &str,
+            artists: Vec<Artist>,
+            albums: Vec<Album>,
+            songs: Vec<Song>,
+        ) {
             self.type_text(text);
             let actions = self.wait(300);
             assert_eq!(actions, [Action::Search(text.to_owned())]);
             self.send(Event::Searched {
                 query: text.to_owned(),
-                result: Ok(SearchResults { artists, albums }),
+                result: Ok(SearchResults {
+                    artists,
+                    albums,
+                    songs,
+                }),
             });
         }
 
@@ -3180,6 +3236,7 @@ mod tests {
             result: Ok(SearchResults {
                 artists: vec![artist("Nirvana")],
                 albums: vec![],
+                songs: vec![],
             }),
         });
         assert_eq!(app.search_view().results, None);
@@ -3190,6 +3247,7 @@ mod tests {
             result: Ok(SearchResults {
                 artists: vec![artist("Nirvana")],
                 albums: vec![nevermind()],
+                songs: vec![],
             }),
         });
         let search = app.search_view();
@@ -3219,6 +3277,7 @@ mod tests {
             result: Ok(SearchResults {
                 artists: vec![artist("Nirvanas")],
                 albums: vec![nevermind()],
+                songs: vec![],
             }),
         });
         assert_eq!(app.search_view().selected, 0);
@@ -3393,6 +3452,62 @@ mod tests {
         assert_eq!(app.search_view().selected, 2);
     }
 
+    fn in_bloom() -> Song {
+        Song {
+            track: track("In Bloom", 254),
+            album: nevermind(),
+        }
+    }
+
+    #[test]
+    fn search_lists_songs_after_albums() {
+        let mut app = shelf_app();
+        app.key(Ctrl('f'));
+        app.search_all(
+            "bloom",
+            vec![artist("Nirvana")],
+            vec![nevermind()],
+            vec![in_bloom()],
+        );
+        let song = in_bloom();
+        assert_eq!(
+            app.search_view().items(),
+            [
+                SearchItem::Artist(&artist("Nirvana")),
+                SearchItem::Album(&nevermind()),
+                SearchItem::Song(&song),
+            ]
+        );
+    }
+
+    #[test]
+    fn enter_on_search_song_plays_its_album_from_the_song() {
+        let mut app = shelf_app();
+        app.key(Ctrl('f'));
+        app.search_all("bloom", vec![], vec![], vec![in_bloom()]);
+        app.key(Down);
+        assert_eq!(app.key(Enter), [load_tracks("nevermind")]);
+        assert_eq!(app.album_view().album, nevermind());
+        // The album plays from the song once its tracks are in, and the song is selected.
+        let actions = app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
+        assert!(actions.contains(&play("nevermind", 1)), "{actions:?}");
+        assert_eq!(app.album_view().selected, 1);
+    }
+
+    #[test]
+    fn ctrl_e_on_search_song_plays_or_queues_it_and_ctrl_a_shelves_its_album() {
+        let mut app = App::new(vec![]);
+        app.key(Ctrl('f'));
+        app.search_all("bloom", vec![], vec![], vec![in_bloom()]);
+        app.key(Down);
+        // Nothing is playing: the queued song starts at once.
+        assert_eq!(
+            app.key(Ctrl('e')),
+            [Action::Play(Item::Track(track_uri("In Bloom")))]
+        );
+        assert_eq!(app.key(Ctrl('a')), [Action::AddToShelf(nevermind())]);
+    }
+
     #[test]
     fn ctrl_a_on_search_album_adds_to_shelf() {
         let mut app = App::new(vec![]);
@@ -3432,6 +3547,7 @@ mod tests {
             .map(|item| match item {
                 SearchItem::Album(a) => app.state.on_shelf(&a.uri),
                 SearchItem::Artist(_) => false,
+                SearchItem::Song(s) => app.state.on_shelf(&s.album.uri),
             })
             .collect();
         assert_eq!(marked, [true, false]);

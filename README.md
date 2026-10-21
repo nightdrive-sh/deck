@@ -43,7 +43,7 @@ works without it.
 ## Other features
 
 - **Shelf:** your albums, grouped by artist. Add any album with `a`.
-- **Search** for artists and albums.
+- **Search** for artists, albums and songs.
 - **Queue:** add tracks or whole albums; the queue plays right after the current track.
 - **Genre radio:** endless music from a genre (lofi, synthwave, shoegaze, 60s rock…),
   and you can add [your own genres](#your-own-genres).
@@ -215,10 +215,12 @@ Albums on your shelf have a green ● after them in every list.
 ### Search
 
 Type to search; the search starts when you pause typing. ← → move the cursor. Results are
-grouped into artists and albums. ↓ or Enter moves from the search field to the results,
-where the keys work as in any other list: Enter opens an artist or album, `a` adds an
-album to your shelf and `e` adds it to the queue. ↑ on the first result or `f` goes back
-to the search field. Esc goes back from search.
+grouped into artists, albums and songs. ↓ or Enter moves from the search field to the
+results, where the keys work as in any other list: Enter opens an artist or album, `a` adds
+an album to your shelf and `e` adds it to the queue. Enter on a song plays it and its album
+on from there (the album opens with the song selected), `e` adds the song to the queue and
+`a` puts its album on your shelf. ↑ on the first result or `f` goes back to the search
+field. Esc goes back from search.
 
 ### Queue
 

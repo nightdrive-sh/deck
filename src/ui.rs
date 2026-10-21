@@ -74,7 +74,7 @@ const MUTED: Color = Color::Rgb(0x8A, 0x8F, 0x99);
 /// The remaining part of the progress bar and the rule above the help row: darker
 /// than text, so that the full-width rule does not stand out.
 const RULE: Color = Color::Rgb(0x4A, 0x4E, 0x58);
-/// Group headings of the search results (Artists, Albums).
+/// Group headings of the search results (Artists, Albums, Songs).
 const HEADING: Color = Color::Rgb(0x6B, 0x80, 0xA0);
 /// Subtitle of a stale list: the weekly update has been missed.
 const WARNING: Color = Color::Rgb(0xE6, 0xC2, 0x4A);
@@ -764,7 +764,7 @@ fn search(frame: &mut Frame, state: &State, view: &SearchView, area: Rect) {
     let Some(found) = &view.results else {
         return;
     };
-    if found.artists.is_empty() && found.albums.is_empty() {
+    if found.artists.is_empty() && found.albums.is_empty() && found.songs.is_empty() {
         frame.render_widget(hint("No results"), results);
         return;
     }
@@ -788,6 +788,15 @@ fn search(frame: &mut Frame, state: &State, view: &SearchView, area: Rect) {
                 }
                 shelf_mark(&mut line, state, album);
                 ("Albums", line)
+            }
+            SearchItem::Song(song) => {
+                let line = Line::from(vec![
+                    song.track.name.as_str().into(),
+                    "  ".into(),
+                    song.track.artist.as_str().fg(MUTED),
+                    format!(" · {}", song.album.name).fg(MUTED),
+                ]);
+                ("Songs", line)
             }
         };
         if group != Some(name) {
@@ -1690,6 +1699,7 @@ mod tests {
                             None,
                         ),
                     ],
+                    songs: vec![],
                 }),
             },
             later,
@@ -1786,6 +1796,7 @@ mod tests {
                     albums: (1..=albums)
                         .map(|i| album(&i.to_string(), &format!("Album {i}"), "Foo Fighters", None))
                         .collect(),
+                    songs: vec![],
                 }),
             },
             now,
@@ -2227,6 +2238,7 @@ mod tests {
                 result: Ok(SearchResults {
                     artists: vec![],
                     albums: vec![nevermind()],
+                    songs: vec![],
                 }),
             },
             later,
@@ -2332,6 +2344,7 @@ mod tests {
                     result: Ok(SearchResults {
                         artists: vec![],
                         albums: vec![found],
+                        songs: vec![],
                     }),
                 },
                 later,
@@ -3170,6 +3183,7 @@ mod tests {
                         name: "Foo Fighters".to_owned(),
                     }],
                     albums: vec![colour()],
+                    songs: vec![],
                 }),
             },
             later,

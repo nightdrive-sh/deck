@@ -109,6 +109,14 @@ pub struct FoundSeed {
 pub struct SearchResults {
     pub artists: Vec<Artist>,
     pub albums: Vec<Album>,
+    pub songs: Vec<Song>,
+}
+
+/// A song search hit: the track and the album it is on, which plays on from it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Song {
+    pub track: Track,
+    pub album: Album,
 }
 
 #[derive(Clone)]
@@ -171,8 +179,8 @@ impl Catalog {
         })
     }
 
-    /// Searches for artists and albums. The result for the same query comes from
-    /// memory, so that e.g. backspace does not search again.
+    /// Searches for artists, albums and songs, in one request. The result for the same
+    /// query comes from memory, so that e.g. backspace does not search again.
     pub async fn search(&self, query: &str) -> Result<SearchResults> {
         self.shared
             .searches
@@ -184,21 +192,14 @@ impl Catalog {
         let page: SearchPage = self
             .get(
                 "/search",
-                &[("q", query), ("type", "artist,album"), ("limit", "10")],
+                &[
+                    ("q", query),
+                    ("type", "artist,album,track"),
+                    ("limit", "10"),
+                ],
             )
             .await?;
-        Ok(SearchResults {
-            artists: page
-                .artists
-                .items
-                .into_iter()
-                .map(|a| Artist {
-                    id: a.id,
-                    name: a.name,
-                })
-                .collect(),
-            albums: page.albums.items.into_iter().map(Album::from).collect(),
-        })
+        Ok(search_results(page))
     }
 
     /// Searches for an album by name and artist (an `album:` + `artist:` search). Hits
@@ -303,20 +304,7 @@ impl Catalog {
         let items: Vec<ApiTrack> = self
             .get_all(&format!("/albums/{album_id}/tracks"), &[("limit", "50")])
             .await?;
-        Ok(items
-            .into_iter()
-            .map(|t| Track {
-                uri: t.uri,
-                name: t.name,
-                artist: t
-                    .artists
-                    .iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                duration: Duration::from_millis(t.duration_ms),
-            })
-            .collect())
+        Ok(items.into_iter().map(Track::from).collect())
     }
 
     /// Whether likes work: they need the user's own app (`client_id`).
@@ -723,10 +711,54 @@ async fn refresh(client: &OAuthClient, refresh_token: String) -> Result<OAuthTok
     Ok(token)
 }
 
+/// A search response as artists, albums and songs.
+fn search_results(page: SearchPage) -> SearchResults {
+    SearchResults {
+        artists: page
+            .artists
+            .items
+            .into_iter()
+            .map(|a| Artist {
+                id: a.id,
+                name: a.name,
+            })
+            .collect(),
+        albums: page.albums.items.into_iter().map(Album::from).collect(),
+        songs: page
+            .tracks
+            .map(|tracks| tracks.items)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| Song {
+                track: Track::from(ApiTrack {
+                    uri: t.uri,
+                    name: t.name,
+                    artists: t.artists,
+                    duration_ms: t.duration_ms,
+                }),
+                album: Album::from(t.album),
+            })
+            .collect(),
+    }
+}
+
 #[derive(Deserialize)]
 struct SearchPage {
     artists: Page<ApiArtist>,
     albums: Page<ApiAlbum>,
+    /// Missing from a saved response of an older Deck, which searched artists and albums only.
+    #[serde(default)]
+    tracks: Option<Page<ApiSearchTrack>>,
+}
+
+/// A track as search finds it: with its album.
+#[derive(Deserialize)]
+struct ApiSearchTrack {
+    uri: String,
+    name: String,
+    artists: Vec<ApiArtist>,
+    duration_ms: u64,
+    album: ApiAlbum,
 }
 
 #[derive(Deserialize)]
@@ -774,6 +806,22 @@ struct ApiTrack {
     duration_ms: u64,
 }
 
+impl From<ApiTrack> for Track {
+    fn from(t: ApiTrack) -> Self {
+        Self {
+            uri: t.uri,
+            name: t.name,
+            artist: t
+                .artists
+                .iter()
+                .map(|a| a.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            duration: Duration::from_millis(t.duration_ms),
+        }
+    }
+}
+
 impl From<ApiAlbum> for Album {
     fn from(a: ApiAlbum) -> Self {
         let (artist, artist_id) = a
@@ -800,6 +848,43 @@ impl From<ApiAlbum> for Album {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn search_response_gives_songs_with_their_albums() {
+        let page: SearchPage = serde_json::from_str(
+            r#"{
+              "artists": { "items": [{ "id": "nirvana", "name": "Nirvana" }], "next": null },
+              "albums": { "items": [], "next": null },
+              "tracks": { "items": [{
+                "uri": "spotify:track:inbloom", "name": "In Bloom", "duration_ms": 254000,
+                "artists": [{ "id": "nirvana", "name": "Nirvana" }],
+                "album": { "id": "nevermind", "uri": "spotify:album:nevermind", "name": "Nevermind",
+                  "artists": [{ "id": "nirvana", "name": "Nirvana" }], "release_date": "1991-09-24",
+                  "album_type": "album" }
+              }], "next": null }
+            }"#,
+        )
+        .unwrap();
+        let found = search_results(page);
+        assert_eq!(found.artists.len(), 1);
+        let [song] = found.songs.as_slice() else {
+            panic!("one song: {:?}", found.songs);
+        };
+        assert_eq!(song.track.name, "In Bloom");
+        assert_eq!(song.track.artist, "Nirvana");
+        assert_eq!(song.track.duration, Duration::from_secs(254));
+        assert_eq!(song.album.uri, "spotify:album:nevermind");
+        assert_eq!(song.album.year, Some(1991));
+    }
+
+    #[test]
+    fn search_response_without_tracks_has_no_songs() {
+        let page: SearchPage = serde_json::from_str(
+            r#"{ "artists": { "items": [], "next": null }, "albums": { "items": [], "next": null } }"#,
+        )
+        .unwrap();
+        assert!(search_results(page).songs.is_empty());
+    }
 
     fn scopes(names: &[&str]) -> Vec<String> {
         names.iter().map(|&name| name.to_owned()).collect()
