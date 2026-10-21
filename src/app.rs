@@ -101,6 +101,11 @@ pub enum Event {
     Media(MediaCommand),
     /// `deck ctl play-album <uri>`: open the album (shelf or Curated) and play it from the start.
     PlayAlbum(String),
+    /// `deck ctl play-song <track> <album>`: as `PlayAlbum`, from that track.
+    PlaySong {
+        track: String,
+        album: String,
+    },
     /// `deck ctl search <query>`: open the search view with the query and search right away.
     Search(String),
     /// Time passing: fires the debounced search. The loop must send this more often
@@ -587,6 +592,9 @@ pub struct State {
     /// An album asked for by `deck ctl play-album`, or a song's album from the search: it plays
     /// as soon as its tracks arrive, from the track selected in its view (the song's, or the first).
     play_on_load: Option<String>,
+    /// The track `play_on_load`'s album starts from (`deck ctl play-song`, a song from the search):
+    /// it is selected when the album opens.
+    play_from: Option<String>,
 }
 
 impl State {
@@ -613,6 +621,7 @@ impl State {
             rng: genres::random() | 1,
             error: None,
             play_on_load: None,
+            play_from: None,
         };
         state.set_shelf(shelf);
         state
@@ -784,6 +793,10 @@ impl State {
             Event::Key(key) => self.key(key, now),
             Event::Media(command) => self.media(command),
             Event::PlayAlbum(uri) => self.play_album_remote(uri),
+            Event::PlaySong { track, album } => {
+                self.play_from = Some(track);
+                self.play_album_remote(album)
+            }
             Event::Search(query) => self.search_remote(&query),
             Event::Tick => self.tick(now),
             Event::Player(event) => self.player(event, now),
@@ -1067,7 +1080,7 @@ impl State {
             });
         self.play_on_load = Some(uri.clone());
         match album {
-            Some(album) => self.open_album(album),
+            Some(album) => self.open_album_to_play(album),
             // Not on the shelf or in Curated: fetch its details first (`album_fetched`).
             None => vec![Action::FetchAlbum(uri)],
         }
@@ -1080,9 +1093,10 @@ impl State {
             return Vec::new();
         }
         match result {
-            Ok(album) => self.open_album(album),
+            Ok(album) => self.open_album_to_play(album),
             Err(message) => {
                 self.play_on_load = None;
+                self.play_from = None;
                 self.error = Some(message);
                 Vec::new()
             }
@@ -1298,9 +1312,16 @@ impl State {
     /// the tracks arrive (`album_tracks`), so the album goes on after the song.
     fn play_song(&mut self, song: Song) -> Vec<Action> {
         self.play_on_load = Some(song.album.uri.clone());
-        let actions = self.open_album(song.album);
+        self.play_from = Some(song.track.uri);
+        self.open_album_to_play(song.album)
+    }
+
+    /// Opens the album that `play_on_load` waits for, with `play_from`'s track selected: it plays
+    /// from the selected track when the tracks arrive.
+    fn open_album_to_play(&mut self, album: Album) -> Vec<Action> {
+        let actions = self.open_album(album);
         if let Some(View::Album(view)) = self.views.last_mut() {
-            view.select_uri = Some(song.track.uri);
+            view.select_uri = self.play_from.take();
         }
         actions
     }
@@ -3796,6 +3817,19 @@ mod tests {
         // Only once: tracks arriving again (e.g. reopening the album) don't restart playback.
         let again = app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
         assert!(!again.contains(&play("nevermind", 0)));
+    }
+
+    #[test]
+    fn ctl_play_song_plays_its_album_from_the_song() {
+        let mut app = shelf_app();
+        let event = Event::PlaySong {
+            track: track_uri("Come As You Are"),
+            album: nevermind().uri,
+        };
+        assert_eq!(app.send(event), [load_tracks("nevermind")]);
+        let actions = app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
+        assert!(actions.contains(&play("nevermind", 2)), "{actions:?}");
+        assert_eq!(app.album_view().selected, 2);
     }
 
     #[test]

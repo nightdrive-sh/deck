@@ -51,7 +51,8 @@ const TICK: Duration = Duration::from_millis(100);
 const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
                      | ctl <toggle|play|pause|next|previous|like> \
-                     | ctl play-album <uri> | ctl search <query> | ctl restore <file> \
+                     | ctl play-album <uri> | ctl play-song <track uri> <album uri> \
+                     | ctl search <query> | ctl restore <file> \
                      | search --json <query> | artist-albums --json <artist id> \
                      | --help | --version]";
 
@@ -115,6 +116,11 @@ impl Mode {
             ["ctl", "play-album", uri] => now_playing::Control::parse(&format!("play-album {uri}"))
                 .map(Self::Ctl)
                 .ok_or(USAGE),
+            ["ctl", "play-song", track, album] => {
+                now_playing::Control::parse(&format!("play-song {track} {album}"))
+                    .map(Self::Ctl)
+                    .ok_or(USAGE)
+            }
             ["ctl", "restore", path] => now_playing::Control::parse(&format!("restore {path}"))
                 .map(Self::Ctl)
                 .ok_or(USAGE),
@@ -219,7 +225,18 @@ async fn run_mode(mode: Mode) -> Result<()> {
                 .iter()
                 .map(|a| serde_json::json!({ "id": a.id, "name": a.name }))
                 .collect();
-            let json = serde_json::json!({ "artists": artists, "albums": found.albums });
+            let songs: Vec<_> = found
+                .songs
+                .iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "uri": s.track.uri, "name": s.track.name, "artist": s.track.artist,
+                        "duration_ms": s.track.duration.as_millis() as u64, "album": s.album,
+                    })
+                })
+                .collect();
+            let json =
+                serde_json::json!({ "artists": artists, "albums": found.albums, "songs": songs });
             println!("{json}");
             Ok(())
         }
@@ -385,6 +402,9 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
         let _ = results.send(match control {
             now_playing::Control::Media(command) => app::Event::Media(command),
             now_playing::Control::PlayAlbum(uri) => app::Event::PlayAlbum(uri),
+            now_playing::Control::PlaySong { track, album } => {
+                app::Event::PlaySong { track, album }
+            }
             now_playing::Control::Search(query) => app::Event::Search(query),
             // The same as the start's own restore: paused at the saved position, with the queue
             now_playing::Control::Restore(path) => match PlaybackFile::at(path).load() {
@@ -976,6 +996,14 @@ mod tests {
             )))
         );
         assert_eq!(mode(&["ctl", "restore", "playback.json"]), None);
+        assert_eq!(
+            mode(&["ctl", "play-song", "spotify:track:t", "spotify:album:a"]),
+            Some(Mode::Ctl(now_playing::Control::PlaySong {
+                track: "spotify:track:t".to_owned(),
+                album: "spotify:album:a".to_owned(),
+            }))
+        );
+        assert_eq!(mode(&["ctl", "play-song", "spotify:track:t"]), None);
         assert_eq!(mode(&["ctl"]), None);
         assert_eq!(mode(&["ctl", "dance"]), None);
         assert_eq!(

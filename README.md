@@ -283,14 +283,16 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 
 - `deck ctl toggle|play|pause|next|previous|like` controls playback.
 - `deck ctl play-album <spotify:album:…>` opens an album and plays it.
+- `deck ctl play-song <spotify:track:…> <spotify:album:…>` opens the song's album and plays it from the song.
 - `deck ctl search <query>` opens the search with the results.
 - `deck ctl restore <file>` goes back to a saved playback state: a copy of
   `~/.local/state/deck/playback.json`, by its absolute path. The album or radio, the track, the position and the
   queue come back as when Deck starts, paused; `deck ctl play` goes on. A script can keep the file before it plays
   something else and put things back after.
 
-For desktop launchers, `deck search --json <query>` and `deck artist-albums --json <artist id>`
-print artists and albums as JSON without a running Deck (they need `client_id`).
+For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
+its album) and `deck artist-albums --json <artist id>` print JSON without a running Deck (they
+need `client_id`).
 Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
 `~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.
 [Nightdrive](https://github.com/nightdrive-sh/nightdrive) uses all of these for its top bar and
