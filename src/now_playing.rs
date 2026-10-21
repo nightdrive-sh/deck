@@ -25,6 +25,7 @@
 
 use std::{
     io::{BufRead, BufReader, Write},
+    path::PathBuf,
     process::{Child, ChildStdin, Stdio},
     time::{Duration, Instant},
 };
@@ -94,14 +95,18 @@ impl Command {
     }
 }
 
-/// What the running Deck can be told: a media key, an album to play (`deck ctl play-album <uri>`)
-/// or a search to open (`deck ctl search <query>`), e.g. from a desktop launcher. It travels as
-/// one line over the control socket and the helper's stdout.
+/// What the running Deck can be told: a media key, an album to play (`deck ctl play-album <uri>`),
+/// a search to open (`deck ctl search <query>`), e.g. from a desktop launcher, or a saved playback
+/// state to go back to (`deck ctl restore <file>`). It travels as one line over the control socket
+/// and the helper's stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Control {
     Media(Command),
     PlayAlbum(String),
     Search(String),
+    /// A copy of `playback.json`, by its absolute path: the running Deck may have another
+    /// working directory than the command that asks.
+    Restore(PathBuf),
 }
 
 impl Control {
@@ -112,6 +117,10 @@ impl Control {
             return uri
                 .starts_with("spotify:album:")
                 .then(|| Self::PlayAlbum(uri.to_owned()));
+        }
+        if let Some(path) = line.strip_prefix("restore ") {
+            let path = PathBuf::from(path.trim());
+            return path.is_absolute().then_some(Self::Restore(path));
         }
         if let Some(query) = line.strip_prefix("search ") {
             let query = query.trim();
@@ -127,6 +136,7 @@ impl Control {
             Self::PlayAlbum(uri) => format!("play-album {uri}"),
             // One line on the wire: a pasted newline must not split the query.
             Self::Search(query) => format!("search {}", query.replace(['\n', '\r'], " ")),
+            Self::Restore(path) => format!("restore {}", path.display()),
         }
     }
 }
@@ -681,6 +691,14 @@ mod tests {
         assert_eq!(Control::parse(&search.line()), Some(search));
         assert_eq!(Control::Search("a\nb".to_owned()).line(), "search a b");
         assert_eq!(Control::parse("search   "), None);
+        let restore = Control::Restore(PathBuf::from("/tmp/playback.json"));
+        assert_eq!(restore.line(), "restore /tmp/playback.json");
+        assert_eq!(
+            Control::parse(&format!("{}\n", restore.line())),
+            Some(restore)
+        );
+        assert_eq!(Control::parse("restore playback.json"), None);
+        assert_eq!(Control::parse("restore "), None);
     }
 
     #[test]

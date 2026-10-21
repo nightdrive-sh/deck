@@ -51,7 +51,7 @@ const TICK: Duration = Duration::from_millis(100);
 const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
                      | ctl <toggle|play|pause|next|previous|like> \
-                     | ctl play-album <uri> | ctl search <query> \
+                     | ctl play-album <uri> | ctl search <query> | ctl restore <file> \
                      | search --json <query> | artist-albums --json <artist id> \
                      | --help | --version]";
 
@@ -113,6 +113,9 @@ impl Mode {
             ["genre", "prompt"] => Ok(Self::Genre(GenreCommand::Prompt)),
             ["now-playing"] => Ok(Self::NowPlaying),
             ["ctl", "play-album", uri] => now_playing::Control::parse(&format!("play-album {uri}"))
+                .map(Self::Ctl)
+                .ok_or(USAGE),
+            ["ctl", "restore", path] => now_playing::Control::parse(&format!("restore {path}"))
                 .map(Self::Ctl)
                 .ok_or(USAGE),
             ["search", "--json", query @ ..] if !query.is_empty() => {
@@ -383,6 +386,12 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
             now_playing::Control::Media(command) => app::Event::Media(command),
             now_playing::Control::PlayAlbum(uri) => app::Event::PlayAlbum(uri),
             now_playing::Control::Search(query) => app::Event::Search(query),
+            // The same as the start's own restore: paused at the saved position, with the queue
+            now_playing::Control::Restore(path) => match PlaybackFile::at(path).load() {
+                Ok(Some(saved)) => app::Event::Restore(Box::new(saved)),
+                Ok(None) => return log::warn!("deck ctl restore: no such file"),
+                Err(e) => return log::warn!("deck ctl restore: {e:#}"),
+            },
         });
     })
     .inspect_err(|e| log::warn!("{e:#}"))
@@ -960,6 +969,13 @@ mod tests {
                 "fm-84 atlas".to_owned()
             )))
         );
+        assert_eq!(
+            mode(&["ctl", "restore", "/tmp/playback.json"]),
+            Some(Mode::Ctl(now_playing::Control::Restore(
+                "/tmp/playback.json".into()
+            )))
+        );
+        assert_eq!(mode(&["ctl", "restore", "playback.json"]), None);
         assert_eq!(mode(&["ctl"]), None);
         assert_eq!(mode(&["ctl", "dance"]), None);
         assert_eq!(
