@@ -1,31 +1,23 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Deck's app icon: Lucide's disc-3 as a neon sign, made like Ferry's (sunset colours on violet) and Mail's (cool
+       colours on near black), but round and in lime and green on dark teal, so the three don't mix up side by side -->
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#2E333D"/>
-      <stop offset="1" stop-color="#1B1E24"/>
-    </linearGradient>
-    <radialGradient id="disc" cx="0.42" cy="0.38" r="0.7">
-      <stop offset="0" stop-color="#2A2E36"/>
-      <stop offset="1" stop-color="#121418"/>
-    </radialGradient>
+    <linearGradient id="neon" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e8ff5c"/><stop offset=".5" stop-color="#5cff9d"/><stop offset="1" stop-color="#19c8b4"/></linearGradient>
+    <filter id="glow" filterUnits="userSpaceOnUse" x="-8" y="-8" width="40" height="40"><feGaussianBlur stdDeviation="16"/></filter>
   </defs>
-  <rect x="6" y="6" width="116" height="116" rx="26" fill="url(#bg)"/>
-  <rect x="6.5" y="6.5" width="115" height="115" rx="25.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
-  <!-- record -->
-  <circle cx="58" cy="66" r="42" fill="url(#disc)"/>
-  <g fill="none" stroke="#FFFFFF" stroke-opacity="0.07" stroke-width="1.2">
-    <circle cx="58" cy="66" r="36"/>
-    <circle cx="58" cy="66" r="31"/>
-    <circle cx="58" cy="66" r="26"/>
-    <circle cx="58" cy="66" r="21"/>
+  <rect width="512" height="512" fill="#0f2626"/>
+  <g transform="translate(76 76) scale(15)" fill="none" stroke="url(#neon)" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke-width="2.2" filter="url(#glow)">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M6 12c0-1.7.7-3.2 1.8-4.2"/>
+      <circle cx="12" cy="12" r="2"/>
+      <path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/>
+    </g>
+    <g stroke-width="1.5">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M6 12c0-1.7.7-3.2 1.8-4.2"/>
+      <circle cx="12" cy="12" r="2"/>
+      <path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/>
+    </g>
   </g>
-  <path d="M30 44 A36 36 0 0 1 52 31" fill="none" stroke="#FFFFFF" stroke-opacity="0.18" stroke-width="2.4" stroke-linecap="round"/>
-  <!-- label -->
-  <circle cx="58" cy="66" r="14" fill="#D07A10"/>
-  <circle cx="58" cy="66" r="2.6" fill="#1B1E24"/>
-  <!-- tonearm -->
-  <circle cx="100" cy="26" r="7" fill="#8A8F99"/>
-  <circle cx="100" cy="26" r="3" fill="#3A4150"/>
-  <path d="M100 26 L104 64 L84 86" fill="none" stroke="#C9CDD4" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
-  <rect x="76" y="81" width="12" height="9" rx="2" transform="rotate(-48 82 85.5)" fill="#D07A10"/>
 </svg>
