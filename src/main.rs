@@ -54,7 +54,7 @@ const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | ctl <toggle|play|pause|next|previous|like|quit> \
                      | ctl play-album <uri> | ctl play-song <track uri> <album uri> \
                      | ctl queue-album <uri> | ctl queue-song <track uri> <album uri> \
-                     | ctl unqueue <n> | ctl shelf-add <uri> | ctl shelf-remove <uri> \
+                     | ctl unqueue <n> | ctl queue-clear | ctl shelf-add <uri> | ctl shelf-remove <uri> \
                      | ctl seek <ms> | ctl radio <genre id> \
                      | ctl favorite-add <genre id> | ctl favorite-remove <genre id> \
                      | ctl curated-reject <uri> \
@@ -495,6 +495,7 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
                 track: Some(track),
             },
             now_playing::Control::Unqueue(index) => app::Event::Unqueue(index),
+            now_playing::Control::ClearQueue => app::Event::ClearQueue,
             now_playing::Control::ShelfAdd(uri) => app::Event::Shelve { uri, on: true },
             now_playing::Control::ShelfRemove(uri) => app::Event::Shelve { uri, on: false },
             now_playing::Control::Seek(ms) => app::Event::Seek(Duration::from_millis(ms)),

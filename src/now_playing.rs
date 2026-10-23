@@ -61,6 +61,9 @@ pub struct Info {
     pub track_uri: Option<String>,
     #[serde(default)]
     pub album_uri: Option<String>,
+    /// The playing track came from the queue (the album or radio goes on after the queue).
+    #[serde(default)]
+    pub queued: bool,
     /// What plays next, in order (the playing track is not included).
     #[serde(default)]
     pub queue: Vec<QueuedInfo>,
@@ -168,6 +171,8 @@ pub enum Control {
     },
     /// Remove the queue's track at this position, from 0 (`deck ctl unqueue <n>`).
     Unqueue(usize),
+    /// Empty the queue (`deck ctl queue-clear`).
+    ClearQueue,
     /// Put the album on the shelf, or take it off (`deck ctl shelf-add|shelf-remove <uri>`).
     ShelfAdd(String),
     ShelfRemove(String),
@@ -244,6 +249,9 @@ impl Control {
         if line == "quit" {
             return Some(Self::Quit);
         }
+        if line == "queue-clear" {
+            return Some(Self::ClearQueue);
+        }
         if let Some(path) = line.strip_prefix("restore ") {
             let path = PathBuf::from(path.trim());
             return path.is_absolute().then_some(Self::Restore(path));
@@ -267,6 +275,7 @@ impl Control {
             Self::QueueAlbum(uri) => format!("queue-album {uri}"),
             Self::QueueSong { track, album } => format!("queue-song {track} {album}"),
             Self::Unqueue(index) => format!("unqueue {index}"),
+            Self::ClearQueue => "queue-clear".to_owned(),
             Self::ShelfAdd(uri) => format!("shelf-add {uri}"),
             Self::ShelfRemove(uri) => format!("shelf-remove {uri}"),
             Self::Seek(ms) => format!("seek {ms}"),
@@ -794,6 +803,7 @@ mod tests {
             liked: None,
             track_uri: None,
             album_uri: None,
+            queued: false,
             queue: Vec::new(),
             radio: None,
             error: None,
@@ -891,6 +901,7 @@ mod tests {
                 album: "spotify:album:a".to_owned(),
             },
             Control::Unqueue(3),
+            Control::ClearQueue,
             Control::Seek(83_000),
             Control::Radio("indie-rock".to_owned()),
             Control::FavoriteAdd("lofi".to_owned()),

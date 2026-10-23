@@ -137,6 +137,8 @@ pub enum Event {
     },
     /// `deck ctl unqueue <n>`: remove the queue's track at that position.
     Unqueue(usize),
+    /// `deck ctl queue-clear`: empty the queue.
+    ClearQueue,
     /// `deck ctl shelf-add|shelf-remove <uri>`: put the album (URI) on the shelf or take it off.
     Shelve {
         uri: String,
@@ -853,6 +855,10 @@ impl State {
                 }
                 Vec::new()
             }
+            Event::ClearQueue => {
+                self.playback.queue.clear();
+                Vec::new()
+            }
             // An album from elsewhere is fetched first for its year and artist, as from the radio.
             Event::Shelve { uri, on: true } if !self.on_shelf(&uri) => {
                 vec![Action::AddRadioAlbumToShelf(uri)]
@@ -1072,6 +1078,7 @@ impl State {
                 Some(Current::Queued(track)) => Some(track.album_uri.clone()),
                 Some(Current::Radio) | None => None,
             },
+            queued: matches!(self.playback.current, Some(Current::Queued(_))),
             queue: self
                 .playback
                 .queue
@@ -4348,6 +4355,29 @@ mod tests {
     }
 
     #[test]
+    fn next_after_a_remote_song_plays_the_queue_first() {
+        let mut app = nevermind_playing(0);
+        queue_bleach(&mut app);
+        // Another song of the album, from a window (`deck ctl play-song`)
+        app.send(Event::PlaySong {
+            track: track_uri("Come As You Are"),
+            album: nevermind().uri,
+        });
+        app.send(album_tracks(&nevermind(), Ok(nevermind_tracks())));
+        app.send(started("Come As You Are"));
+        assert_eq!(queue_names(&app), ["Blew", "Floyd The Barber"]);
+        assert_eq!(
+            app.send(Event::Media(MediaCommand::Next)),
+            [play_track("Blew")]
+        );
+        assert_eq!(queue_names(&app), ["Floyd The Barber"]);
+        // The window tells a queued track from the album's
+        assert!(app.state.now_playing_info(app.now).unwrap().queued);
+        app.send(Event::ClearQueue);
+        assert!(queue_names(&app).is_empty());
+    }
+
+    #[test]
     fn remote_queue_takes_one_song_or_the_album_and_unqueue_removes() {
         let mut app = nevermind_playing(0);
         assert_eq!(
@@ -4736,6 +4766,7 @@ mod tests {
             liked: None,
             track_uri: Some("spotify:track:everlong".into()),
             album_uri: None,
+            queued: false,
             queue: Vec::new(),
             radio: None,
             error: None,

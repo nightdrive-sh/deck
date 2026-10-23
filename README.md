@@ -287,7 +287,7 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 - `deck ctl search <query>` opens the search with the results.
 - `deck ctl queue-album <spotify:album:…>` adds an album to the end of the queue, and
   `deck ctl queue-song <spotify:track:…> <spotify:album:…>` one song of it. `deck ctl unqueue <n>` removes the
-  queue's track at position n, counting from 0.
+  queue's track at position n, counting from 0, and `deck ctl queue-clear` empties the queue.
 - `deck ctl shelf-add <spotify:album:…>` puts an album on your shelf, `deck ctl shelf-remove <spotify:album:…>`
   takes it off.
 - `deck ctl seek <ms>` jumps to that position in the playing track (paused stays paused).
@@ -300,7 +300,8 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
   queue come back as when Deck starts, paused; `deck ctl play` goes on. A script can keep the file before it plays
   something else and put things back after.
 
-The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`),
+The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`), whether the
+track came from the queue (`queued`),
 the queue (`queue`: each track's `uri`, `title`, `artist`, `duration_ms` and `album_uri`), the playing
 genre radio (`radio`: its `genre` id, `name` and `tracks` from the playing one on, each with `uri`, `title`,
 `artist`, `album` and `album_uri`) and Deck's latest error (`error`).
