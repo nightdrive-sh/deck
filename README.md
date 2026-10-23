@@ -24,13 +24,15 @@ when you open the album.
 The list is based on:
 
 - your **Last.fm listening history** (most played artists of all time and of the last 3
-  years and 12 months, and most played albums),
+  years and 12 months, and most played albums), if you use Last.fm,
+- what you **play in Deck** (the last 30 days) and, if you write one, a **few lines about
+  the music you like** (`~/.config/deck/taste.md`),
 - your **shelf** (the records you value most),
 - **earlier lists**: what was suggested before, what you put on your shelf and what you
   dismissed.
 
-Albums you already know (3 or more plays on Last.fm), albums on your shelf and earlier
-suggestions never appear again. Deck learns as you go: **adding an album to your shelf**
+Albums you already know (3 or more plays on Last.fm, or without Last.fm, played in Deck
+lately), albums on your shelf and earlier suggestions never appear again. Deck learns as you go: **adding an album to your shelf**
 tells the next list that you liked it, and **`d` (not for me)** removes the album and tells
 the next list to avoid records like it.
 
@@ -58,8 +60,8 @@ works without it.
   players.
 - **macOS**, or **Linux** (tested on Fedora Asahi Remix on Apple Silicon).
 - **Rust**, to build Deck from source.
-- For Curated (optional): a free **Last.fm account** that has been recording what you
-  listen to, and **Claude Code**.
+- For Curated (optional): **Claude Code**, and best a free **Last.fm account** that has
+  been recording what you listen to.
 
 ## Installation
 
@@ -334,12 +336,14 @@ launcher.
 
 ## Setting up Curated (optional, recommended)
 
-Curated is put together once a week by Claude Code. You need:
+Curated is put together once a week by Claude Code. It works best from your Last.fm
+listening history, and without Last.fm from what you play in Deck, your shelf and a few
+lines you write about your taste. You need:
 
-- **A Last.fm account** with your listening history. Spotify can record your listening
+- **Best, a Last.fm account** with your listening history. Spotify can record your listening
   there: in Last.fm, go to **Settings → Applications** and connect Spotify. The more
   history there is, the better the list.
-- **A Last.fm API key:** create one at
+- **With Last.fm, a Last.fm API key:** create one at
   [last.fm/api/account/create](https://www.last.fm/api/account/create) (any application
   name will do; the callback URL can be left empty). Copy the **API key**.
 - **[Claude Code](https://claude.com/claude-code)**, installed and signed in, so that the
@@ -348,9 +352,9 @@ Curated is put together once a week by Claude Code. You need:
 `deck` and `claude` must both be found in your terminal's `PATH` (check with
 `command -v deck claude`).
 
-### 1. Add Last.fm to the config file
+### 1. Add Last.fm to the config file, or write about your taste
 
-Add two lines to `~/.config/deck/config.toml`:
+With Last.fm, add two lines to `~/.config/deck/config.toml`:
 
 ```toml
 lastfm_api_key = "your Last.fm API key"
@@ -364,6 +368,12 @@ deck taste
 ```
 
 If something is missing, the error tells you what to add.
+
+Without Last.fm, write a few lines about the music you like in
+`~/.config/deck/taste.md`, in your own words: artists and albums you love, eras, moods,
+what you want more of. Put some favourite albums on your shelf too. `deck taste` shows
+what the curator gets. The list gets better as you play in Deck, and you can edit the
+file any time.
 
 ### 2. Make the first list
 
@@ -405,8 +415,8 @@ Deck). Claude can only run two Deck commands, write candidate files in
 `~/.cache/deck/curate/` and search the web:
 
 - `deck taste` prints your taste profile: Last.fm history (including every album you
-  have already listened to), shelf, earlier lists and earlier candidates that were not
-  on Spotify.
+  have already listened to) if you use it, `taste.md`, what you have played in Deck
+  lately, shelf, earlier lists and earlier candidates that were not on Spotify.
 - `deck curate submit [--dry-run]` reads album candidates with reasons, finds them on
   Spotify and reports which ones are accepted and why others are not (not on Spotify, on
   your shelf, suggested before, already listened to). Without `--dry-run` it saves the
@@ -432,6 +442,7 @@ them meets it first, the others wait too.
 | `~/.config/deck/my-genres.json` | Your own genres |
 | `~/.config/deck/curated.json` | This week's Curated list |
 | `~/.config/deck/curated-history.json` | Everything Curated has suggested |
+| `~/.config/deck/taste.md` | Optional: a few lines about your taste, for Curated |
 | `~/.cache/deck/` | Sign-ins (`credentials.json`, `webapi.json`), Deck's log `deck.log` (the previous run's log is `deck.log.1`), Curated's log `curate.log` and the caches below |
 | `~/.cache/deck/curate-searches.json` | Spotify searches of the last day by `deck curate submit` and `deck genre add`, the daily search count, and Curated's candidates that were not found on Spotify (kept for half a year) |
 | `~/.cache/deck/rate-limit.json` | A possible 429 block from Spotify, shared by Deck, `deck curate submit` and `deck genre add` |

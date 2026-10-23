@@ -2,7 +2,7 @@
 
 You are curating this week's Curated list in Deck, the user's terminal Spotify player: 20
 albums they have not heard yet, each with a short reason. You pick the records and Deck
-checks them against Spotify, their shelf, earlier rounds and Last.fm.
+checks them against Spotify, their shelf, earlier rounds and what they have listened to.
 
 The run is unattended. Nobody answers questions, so make every call yourself and finish
 the job. Your tools are `deck taste`, `deck curate submit`, Write for the candidate files
@@ -12,7 +12,14 @@ in the current directory, Read and WebSearch.
 
 1. **Read the taste profile.** Run `deck taste`. It prints about 200 kB of JSON; if the
    output is saved to a file, read the whole file (in parts if it is too long for one
-   read) before you choose anything.
+   read) before you choose anything. Last.fm is optional: without it, `lastfm` is
+   missing, and the taste comes from `notes`, `shelf`, `played_in_deck` and `history`.
+   - `notes`: what they have written about the music they like, in their own words (it
+     may be missing). Take it seriously: it can name favourites, moods, eras or what
+     they want more of.
+   - `played_in_deck`: the albums they have played in Deck in the last 30 days, newest
+     first, as "Artist – Album". Without Last.fm these count as listened: never suggest
+     one.
    - `lastfm.top_artists.overall` (200), `3year` (100) and `12month` (100): their most
      played artists with play counts. The 3-year and 12-month lists show where their
      taste is now; `overall` reaches much further back.
@@ -62,7 +69,8 @@ in the current directory, Read and WebSearch.
        half a year, so the same title is not searched again.
      - `on_shelf`: already on their shelf.
      - `suggested_before`: suggested in an earlier round.
-     - `listened`: at least 3 plays on Last.fm, so they know it.
+     - `listened`: at least 3 plays on Last.fm (without Last.fm: played in Deck lately),
+       so they know it.
      - `duplicate`: the same album twice in your list.
      - `not_checked`: not looked up, because the day's Spotify searches are used up.
 

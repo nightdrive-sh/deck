@@ -3,7 +3,12 @@
 //! for the Curated list.
 //!
 //! The check rules are a pure function, [`check`]: the candidates, their Spotify hits,
-//! the shelf, the history and Last.fm's listened albums → a report and the list's albums.
+//! the shelf, the history and the listened albums → a report and the list's albums.
+//!
+//! Last.fm is optional. With it, the taste is your listening history there and an album
+//! with [`LISTENED_MIN_PLAYS`] plays is listened. Without it, the taste is what Deck itself
+//! knows (the albums played in Deck lately, the shelf, earlier lists) and your own words
+//! in `~/.config/deck/taste.md`, and the albums played in Deck lately are the listened ones.
 //!
 //! After too many Web API calls Spotify blocks the whole app for hours (429), Deck's
 //! search included. That is why searches go through [`lookup`]: already known
@@ -13,7 +18,11 @@
 //! with Deck itself ([`RateLimit`]). The same [`SearchCache`] also counts the searches
 //! of `deck genre add`.
 
-use std::{io::Read, path::Path, time::Duration};
+use std::{
+    io::{self, Read},
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -21,6 +30,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     catalog::{Album, Catalog, FoundAlbum, FoundSeed, RateLimited},
     config::{self, Config},
+    history::{HistoryFile, Played},
     lastfm::{self, LastFm, Period, TopAlbum, TopArtist},
     lists::{Curated, CuratedFiles, HistoryEntry, ListAlbum, normalize, same_album, track_key},
     rate_limit::RateLimit,
@@ -66,7 +76,8 @@ pub enum Rejection {
     OnShelf,
     /// Suggested in an earlier round.
     SuggestedBefore,
-    /// At least [`LISTENED_MIN_PLAYS`] plays on Last.fm.
+    /// At least [`LISTENED_MIN_PLAYS`] plays on Last.fm, or without Last.fm, played in
+    /// Deck lately.
     Listened,
     /// The same album is already on this list.
     Duplicate,
@@ -241,13 +252,14 @@ fn pick(candidate: &Candidate, found: &[FoundAlbum]) -> Option<Album> {
 /// `deck taste`: prints the taste profile as JSON.
 pub async fn taste() -> Result<()> {
     let config = &Config::load()?;
-    let lastfm = lastfm_client(config)?;
     let shelf = load_shelf()?;
     let files = CuratedFiles::default_paths()?;
     let history = files.history()?;
+    let played = HistoryFile::default_path()?.load();
+    let notes = taste_notes(&taste_notes_path()?)?;
 
-    let profile = Taste {
-        lastfm: LastFmTaste {
+    let lastfm = match lastfm_client(config)? {
+        Some(lastfm) => Some(LastFmTaste {
             user: lastfm_user(config)?.to_owned(),
             top_artists: TopArtists {
                 overall: lastfm.top_artists(Period::Overall, 200).await?,
@@ -263,7 +275,24 @@ pub async fn taste() -> Result<()> {
                 .iter()
                 .map(|a| format!("{} – {}", a.artist, a.album))
                 .collect(),
-        },
+        }),
+        None => None,
+    };
+    if lastfm.is_none() && notes.is_none() && shelf.is_empty() && played.is_empty() {
+        bail!(
+            "Curated has nothing to go on yet. Add Last.fm to ~/.config/deck/config.toml \
+             (lastfm_api_key and lastfm_user), or write a few lines about the music you \
+             like in ~/.config/deck/taste.md, or put some albums on your shelf"
+        );
+    }
+
+    let profile = Taste {
+        lastfm,
+        notes,
+        played_in_deck: played
+            .iter()
+            .map(|p| format!("{} – {}", p.artist, p.name))
+            .collect(),
         not_on_spotify: SearchCache::load(&SearchCache::default_path()?, unix_now())
             .not_found
             .iter()
@@ -315,9 +344,14 @@ pub async fn submit(dry_run: bool) -> Result<()> {
     let files = CuratedFiles::default_paths()?;
     let history = files.history()?;
     let mut catalog: Option<Catalog> = None;
-    let listened = lastfm_client(config)?
-        .listened_albums(&lastfm::albums_cache_path()?, LISTENED_MIN_PLAYS)
-        .await?;
+    let listened = match lastfm_client(config)? {
+        Some(lastfm) => {
+            lastfm
+                .listened_albums(&lastfm::albums_cache_path()?, LISTENED_MIN_PLAYS)
+                .await?
+        }
+        None => played_in_deck(&HistoryFile::default_path()?.load()),
+    };
 
     let skip: Vec<bool> = candidates
         .iter()
@@ -618,15 +652,53 @@ fn lastfm_user(config: &Config) -> Result<&str> {
     }
 }
 
-fn lastfm_client(config: &Config) -> Result<LastFm> {
-    let Some(key) = &config.lastfm_api_key else {
+/// Last.fm, if the config has it. Curated works without it, but half of it (a key without
+/// a user, or a user without a key) is a mistake to point out.
+fn lastfm_client(config: &Config) -> Result<Option<LastFm>> {
+    let given = |value: &Option<String>| value.as_deref().is_some_and(|v| !v.trim().is_empty());
+    if !given(&config.lastfm_api_key) && !given(&config.lastfm_user) {
+        return Ok(None);
+    }
+    let Some(key) = config
+        .lastfm_api_key
+        .as_deref()
+        .filter(|k| !k.trim().is_empty())
+    else {
         bail!(
             "lastfm_api_key is missing from ~/.config/deck/config.toml. Create an API \
              account at https://www.last.fm/api/account/create and add the line \
              lastfm_api_key = \"<your API key>\""
         );
     };
-    LastFm::new(key, lastfm_user(config)?)
+    Ok(Some(LastFm::new(key, lastfm_user(config)?)?))
+}
+
+/// The albums played in Deck lately (its History), as listened: without Last.fm they are
+/// the albums Deck knows you have heard.
+fn played_in_deck(played: &[Played]) -> Vec<TopAlbum> {
+    played
+        .iter()
+        .map(|p| TopAlbum {
+            artist: p.artist.clone(),
+            album: p.name.clone(),
+            plays: LISTENED_MIN_PLAYS,
+        })
+        .collect()
+}
+
+/// Your own words about your taste, for the curator: Deck's setup writes them with you,
+/// and you can edit them any time.
+fn taste_notes_path() -> Result<PathBuf> {
+    Ok(config::config_dir()?.join("taste.md"))
+}
+
+/// The notes, or `None` if there are none (no file, or an empty one).
+fn taste_notes(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text.trim().to_owned()).filter(|t| !t.is_empty())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e).with_context(|| format!("cannot read {}", path.display())),
+    }
 }
 
 /// The shelf, read-only. A broken shelf is an error: the check does not work without it.
@@ -636,7 +708,14 @@ fn load_shelf() -> Result<Vec<Album>> {
 
 #[derive(Serialize)]
 struct Taste {
-    lastfm: LastFmTaste,
+    /// Without Last.fm in the config, left out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lastfm: Option<LastFmTaste>,
+    /// Your own words about your taste (`taste.md`), if you have written any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    notes: Option<String>,
+    /// The albums played in Deck in the last 30 days, newest first ("Artist – Album").
+    played_in_deck: Vec<String>,
     /// Candidates of earlier runs that were not found on Spotify ("Artist – Album").
     not_on_spotify: Vec<String>,
     shelf: Vec<ShelfAlbum>,
@@ -1369,5 +1448,51 @@ mod tests {
             ..config
         };
         assert!(lastfm_user(&blank).is_err());
+
+        let no_key = Config {
+            lastfm_user: Some("me".to_owned()),
+            ..Config::default()
+        };
+        assert!(lastfm_client(&no_key).is_err());
+    }
+
+    #[test]
+    fn lastfm_is_optional() {
+        assert!(lastfm_client(&Config::default()).unwrap().is_none());
+        let blank = Config {
+            lastfm_api_key: Some(String::new()),
+            lastfm_user: Some(" ".to_owned()),
+            ..Config::default()
+        };
+        assert!(lastfm_client(&blank).unwrap().is_none());
+    }
+
+    #[test]
+    fn albums_played_in_deck_are_listened() {
+        let played = [Played {
+            uri: "spotify:album:x".to_owned(),
+            name: "Kroketti".to_owned(),
+            artist: "Ultra Bra".to_owned(),
+            at: NOW,
+        }];
+        let listened = played_in_deck(&played);
+        assert_eq!(
+            known(&candidate("Ultra Bra", "Kroketti"), &[], &[], &listened),
+            Some(Rejection::Listened)
+        );
+    }
+
+    #[test]
+    fn taste_notes_are_optional() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("taste.md");
+        assert_eq!(taste_notes(&path).unwrap(), None);
+        std::fs::write(&path, " \n").unwrap();
+        assert_eq!(taste_notes(&path).unwrap(), None);
+        std::fs::write(&path, "Late-60s folk rock\n").unwrap();
+        assert_eq!(
+            taste_notes(&path).unwrap().as_deref(),
+            Some("Late-60s folk rock")
+        );
     }
 }
