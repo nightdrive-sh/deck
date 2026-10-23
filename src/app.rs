@@ -142,6 +142,17 @@ pub enum Event {
         uri: String,
         on: bool,
     },
+    /// `deck ctl seek <ms>`: jump to that position in the playing track.
+    Seek(Duration),
+    /// `deck ctl radio <genre id>`: start the genre's radio.
+    Radio(String),
+    /// `deck ctl favorite-add|favorite-remove <id>`: the genre on the home page, or off it.
+    Favorite {
+        id: String,
+        on: bool,
+    },
+    /// `deck ctl curated-reject <uri>`: the album out of Curated, as Ctrl+D there.
+    RejectCurated(String),
     /// `deck ctl quit`.
     Quit,
     /// Result of `Action::FetchAlbum`.
@@ -196,6 +207,8 @@ pub enum Action {
         position: Duration,
     },
     TogglePause,
+    /// Jump to this position in the playing track.
+    Seek(Duration),
     Stop,
     Search(String),
     /// Fetch all albums of the artist (id) from Spotify.
@@ -848,6 +861,22 @@ impl State {
                 vec![Action::RemoveFromShelf(uri)]
             }
             Event::Shelve { .. } => Vec::new(),
+            Event::Seek(position) => self.seek(position, now),
+            Event::Radio(id) => match genres::find(&id) {
+                Some(genre) => self.start_radio(genre),
+                None => {
+                    self.error = Some(format!("no such genre: {id}"));
+                    Vec::new()
+                }
+            },
+            Event::Favorite { id, on: true } if !self.favorite(&id) => {
+                vec![Action::AddFavorite(id)]
+            }
+            Event::Favorite { id, on: false } if self.favorite(&id) => {
+                vec![Action::RemoveFavorite(id)]
+            }
+            Event::Favorite { .. } => Vec::new(),
+            Event::RejectCurated(uri) => vec![Action::RejectCurated(uri)],
             Event::Quit => vec![Action::Quit],
             Event::ArtistAlbums { artist_id, result } => {
                 self.artist_albums(&artist_id, result);
@@ -1052,9 +1081,45 @@ impl State {
                     title: track.name.clone(),
                     artist: track.artist.clone(),
                     duration_ms: millis(track.duration),
+                    album_uri: track.album_uri.clone(),
+                })
+                .collect(),
+            radio: self.radio_info(),
+            error: self.error.clone(),
+        })
+    }
+
+    /// The playing radio for Now Playing: its tracks from the playing one on.
+    fn radio_info(&self) -> Option<now_playing::RadioInfo> {
+        let radio = self.playback.radio.as_ref()?;
+        let genre = genres::find(&radio.genre)?;
+        Some(now_playing::RadioInfo {
+            genre: genre.id.clone(),
+            name: genre.name.clone(),
+            tracks: radio
+                .tracks
+                .iter()
+                .skip(radio.index)
+                .map(|track| now_playing::RadioTrackInfo {
+                    uri: track.uri.clone(),
+                    title: track.name.clone(),
+                    artist: track.artist.clone(),
+                    album: track.album.name.clone(),
+                    album_uri: track.album.uri.clone(),
                 })
                 .collect(),
         })
+    }
+
+    /// A jump in the playing track, shown at once; the player confirms it with its position.
+    fn seek(&mut self, position: Duration, now: Instant) -> Vec<Action> {
+        let Some(playing) = &mut self.now_playing else {
+            return Vec::new();
+        };
+        let position = position.min(playing.duration);
+        playing.position = position;
+        playing.position_at = now;
+        vec![Action::Seek(position)]
     }
 
     fn media(&mut self, command: MediaCommand) -> Vec<Action> {
@@ -4672,6 +4737,8 @@ mod tests {
             track_uri: Some("spotify:track:everlong".into()),
             album_uri: None,
             queue: Vec::new(),
+            radio: None,
+            error: None,
         };
         assert_eq!(app.state.now_playing_info(app.now), Some(expected.clone()));
 
@@ -4687,6 +4754,34 @@ mod tests {
 
         app.send(Event::Player(player::Event::Stopped));
         assert_eq!(app.state.now_playing_info(app.now), None);
+    }
+
+    #[test]
+    fn seek_jumps_at_once_and_stays_paused() {
+        let mut app = shelf_app();
+        assert!(app.send(Event::Seek(Duration::from_secs(10))).is_empty());
+        app.send(track_changed());
+        app.send(Event::Player(player::Event::Paused(83_000)));
+        assert_eq!(
+            app.send(Event::Seek(Duration::from_secs(120))),
+            [Action::Seek(Duration::from_secs(120))]
+        );
+        let info = app.state.now_playing_info(app.now).unwrap();
+        assert_eq!((info.position_ms, info.playing), (120_000, false));
+        // Never beyond the track's end.
+        assert_eq!(
+            app.send(Event::Seek(Duration::from_secs(999))),
+            [Action::Seek(Duration::from_secs(250))]
+        );
+    }
+
+    #[test]
+    fn error_reaches_now_playing_info() {
+        let mut app = shelf_app();
+        app.send(track_changed());
+        app.send(Event::Error("could not save the shelf".into()));
+        let info = app.state.now_playing_info(app.now).unwrap();
+        assert_eq!(info.error.as_deref(), Some("could not save the shelf"));
     }
 
     #[test]
@@ -5081,6 +5176,46 @@ mod tests {
         assert_eq!(actions, [Action::Play(Item::Track(first))]);
         app.send(started("Song"));
         request
+    }
+
+    #[test]
+    fn remote_radio_starts_the_genre_and_shows_in_now_playing_info() {
+        let mut app = genre_app(&[]);
+        let request = radio_request(&app.send(Event::Radio("lofi".into())));
+        assert_eq!(request.genre, "lofi");
+        app.send(radio_loaded(&request, station(0..3)));
+        app.send(started("Song"));
+        let radio = app.state.now_playing_info(app.now).unwrap().radio.unwrap();
+        assert_eq!(
+            (radio.genre.as_str(), radio.name.as_str()),
+            ("lofi", lofi().name.as_str())
+        );
+        let titles: Vec<_> = radio.tracks.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["Song 0", "Song 1", "Song 2"]);
+        assert_eq!(radio.tracks[1].album_uri, "spotify:album:record1");
+
+        assert!(app.send(Event::Radio("no-such-genre".into())).is_empty());
+        assert!(app.state.error.is_some());
+    }
+
+    #[test]
+    fn remote_favorites_and_curated_reject() {
+        let mut app = genre_app(&["lofi"]);
+        let on = |id: &str, on| Event::Favorite { id: id.into(), on };
+        assert!(app.send(on("lofi", true)).is_empty());
+        assert_eq!(
+            app.send(on("synthwave", true)),
+            [Action::AddFavorite("synthwave".into())]
+        );
+        assert_eq!(
+            app.send(on("lofi", false)),
+            [Action::RemoveFavorite("lofi".into())]
+        );
+        assert!(app.send(on("synthwave", false)).is_empty());
+        assert_eq!(
+            app.send(Event::RejectCurated("spotify:album:a".into())),
+            [Action::RejectCurated("spotify:album:a".into())]
+        );
     }
 
     fn radio_of(app: &App) -> &RadioPosition {

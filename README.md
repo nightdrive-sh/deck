@@ -290,14 +290,20 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
   queue's track at position n, counting from 0.
 - `deck ctl shelf-add <spotify:album:…>` puts an album on your shelf, `deck ctl shelf-remove <spotify:album:…>`
   takes it off.
+- `deck ctl seek <ms>` jumps to that position in the playing track (paused stays paused).
+- `deck ctl radio <genre id>` starts the genre's radio (the ids: `deck genre list`), and
+  `deck ctl favorite-add <genre id>` / `favorite-remove <genre id>` puts a genre on the home page or takes it off.
+- `deck ctl curated-reject <spotify:album:…>` takes an album out of Curated, as Ctrl+D does there.
 - `deck ctl quit` saves what is playing and quits, as `q` does.
 - `deck ctl restore <file>` goes back to a saved playback state: a copy of
   `~/.local/state/deck/playback.json`, by its absolute path. The album or radio, the track, the position and the
   queue come back as when Deck starts, paused; `deck ctl play` goes on. A script can keep the file before it plays
   something else and put things back after.
 
-The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`) and
-the queue (`queue`: each track's `uri`, `title`, `artist` and `duration_ms`).
+The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`),
+the queue (`queue`: each track's `uri`, `title`, `artist`, `duration_ms` and `album_uri`), the playing
+genre radio (`radio`: its `genre` id, `name` and `tracks` from the playing one on, each with `uri`, `title`,
+`artist`, `album` and `album_uri`) and Deck's latest error (`error`).
 
 For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
 its album), `deck artist-albums --json <artist id>` and `deck album-tracks --json <spotify:album:…>`
@@ -305,7 +311,7 @@ its album), `deck artist-albums --json <artist id>` and `deck album-tracks --jso
 
 `deck serve` (Linux) plays without the screen, for a window of your own: it takes the
 commands above and keeps the state file up to date, and SIGTERM, Ctrl+C or `deck ctl quit`
-ends it, saving what was playing. Errors go to its log. Only one Deck runs at a time: a
+ends it, saving what was playing. Errors go to its log and to the state file's `error`. Only one Deck runs at a time: a
 second one, in the terminal or as `deck serve`, says so and quits.
 Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
 `~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.

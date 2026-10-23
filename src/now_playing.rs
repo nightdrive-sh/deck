@@ -64,6 +64,12 @@ pub struct Info {
     /// What plays next, in order (the playing track is not included).
     #[serde(default)]
     pub queue: Vec<QueuedInfo>,
+    /// The playing genre radio, when it is the playback context.
+    #[serde(default)]
+    pub radio: Option<RadioInfo>,
+    /// Deck's latest error (a failed search, an empty station…), for a window to show.
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// A queued track in [`Info`].
@@ -73,6 +79,28 @@ pub struct QueuedInfo {
     pub title: String,
     pub artist: String,
     pub duration_ms: u64,
+    /// The track's album, for its cover.
+    #[serde(default)]
+    pub album_uri: String,
+}
+
+/// The playing genre radio in [`Info`]: its tracks, from the playing one on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RadioInfo {
+    /// The genre's id and name.
+    pub genre: String,
+    pub name: String,
+    pub tracks: Vec<RadioTrackInfo>,
+}
+
+/// A radio track in [`RadioInfo`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RadioTrackInfo {
+    pub uri: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_uri: String,
 }
 
 /// A media key or a Control Center button.
@@ -143,6 +171,15 @@ pub enum Control {
     /// Put the album on the shelf, or take it off (`deck ctl shelf-add|shelf-remove <uri>`).
     ShelfAdd(String),
     ShelfRemove(String),
+    /// Jump to this position (ms) in the playing track (`deck ctl seek <ms>`).
+    Seek(u64),
+    /// Start the genre's radio (`deck ctl radio <genre id>`).
+    Radio(String),
+    /// Add the genre (id) to favourites, or remove it (`deck ctl favorite-add|favorite-remove <id>`).
+    FavoriteAdd(String),
+    FavoriteRemove(String),
+    /// Reject the album (URI) from Curated (`deck ctl curated-reject <uri>`).
+    RejectCurated(String),
     /// Save the playback state and exit (`deck ctl quit`), e.g. to end `deck serve`.
     Quit,
 }
@@ -189,6 +226,21 @@ impl Control {
         if let Some(uri) = line.strip_prefix("shelf-remove ") {
             return album_uri(uri).map(Self::ShelfRemove);
         }
+        if let Some(ms) = line.strip_prefix("seek ") {
+            return ms.trim().parse().ok().map(Self::Seek);
+        }
+        if let Some(id) = line.strip_prefix("radio ") {
+            return genre_id(id).map(Self::Radio);
+        }
+        if let Some(id) = line.strip_prefix("favorite-add ") {
+            return genre_id(id).map(Self::FavoriteAdd);
+        }
+        if let Some(id) = line.strip_prefix("favorite-remove ") {
+            return genre_id(id).map(Self::FavoriteRemove);
+        }
+        if let Some(uri) = line.strip_prefix("curated-reject ") {
+            return album_uri(uri).map(Self::RejectCurated);
+        }
         if line == "quit" {
             return Some(Self::Quit);
         }
@@ -217,6 +269,11 @@ impl Control {
             Self::Unqueue(index) => format!("unqueue {index}"),
             Self::ShelfAdd(uri) => format!("shelf-add {uri}"),
             Self::ShelfRemove(uri) => format!("shelf-remove {uri}"),
+            Self::Seek(ms) => format!("seek {ms}"),
+            Self::Radio(id) => format!("radio {id}"),
+            Self::FavoriteAdd(id) => format!("favorite-add {id}"),
+            Self::FavoriteRemove(id) => format!("favorite-remove {id}"),
+            Self::RejectCurated(uri) => format!("curated-reject {uri}"),
             Self::Quit => "quit".to_owned(),
         }
     }
@@ -226,6 +283,12 @@ impl Control {
 fn album_uri(uri: &str) -> Option<String> {
     let uri = uri.trim();
     uri.starts_with("spotify:album:").then(|| uri.to_owned())
+}
+
+/// A genre id argument (one word), trimmed; `None` for anything else.
+fn genre_id(id: &str) -> Option<String> {
+    let id = id.trim();
+    (!id.is_empty() && !id.contains(char::is_whitespace)).then(|| id.to_owned())
 }
 
 /// Deck's side: the helper process that is told the playing track and sends the keys.
@@ -732,6 +795,8 @@ mod tests {
             track_uri: None,
             album_uri: None,
             queue: Vec::new(),
+            radio: None,
+            error: None,
         }
     }
 
@@ -826,6 +891,11 @@ mod tests {
                 album: "spotify:album:a".to_owned(),
             },
             Control::Unqueue(3),
+            Control::Seek(83_000),
+            Control::Radio("indie-rock".to_owned()),
+            Control::FavoriteAdd("lofi".to_owned()),
+            Control::FavoriteRemove("lofi".to_owned()),
+            Control::RejectCurated("spotify:album:a".to_owned()),
             Control::ShelfAdd("spotify:album:a".to_owned()),
             Control::ShelfRemove("spotify:album:a".to_owned()),
             Control::Quit,
@@ -836,6 +906,10 @@ mod tests {
         assert_eq!(Control::parse("queue-album spotify:track:t"), None);
         assert_eq!(Control::parse("unqueue first"), None);
         assert_eq!(Control::parse("shelf-add "), None);
+        assert_eq!(Control::parse("seek soon"), None);
+        assert_eq!(Control::parse("radio "), None);
+        assert_eq!(Control::parse("radio indie rock"), None);
+        assert_eq!(Control::parse("curated-reject spotify:track:t"), None);
     }
 
     #[test]

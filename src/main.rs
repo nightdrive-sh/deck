@@ -55,6 +55,9 @@ const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | ctl play-album <uri> | ctl play-song <track uri> <album uri> \
                      | ctl queue-album <uri> | ctl queue-song <track uri> <album uri> \
                      | ctl unqueue <n> | ctl shelf-add <uri> | ctl shelf-remove <uri> \
+                     | ctl seek <ms> | ctl radio <genre id> \
+                     | ctl favorite-add <genre id> | ctl favorite-remove <genre id> \
+                     | ctl curated-reject <uri> \
                      | ctl search <query> | ctl restore <file> \
                      | search --json <query> | artist-albums --json <artist id> \
                      | album-tracks --json <album uri> \
@@ -494,6 +497,11 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
             now_playing::Control::Unqueue(index) => app::Event::Unqueue(index),
             now_playing::Control::ShelfAdd(uri) => app::Event::Shelve { uri, on: true },
             now_playing::Control::ShelfRemove(uri) => app::Event::Shelve { uri, on: false },
+            now_playing::Control::Seek(ms) => app::Event::Seek(Duration::from_millis(ms)),
+            now_playing::Control::Radio(id) => app::Event::Radio(id),
+            now_playing::Control::FavoriteAdd(id) => app::Event::Favorite { id, on: true },
+            now_playing::Control::FavoriteRemove(id) => app::Event::Favorite { id, on: false },
+            now_playing::Control::RejectCurated(uri) => app::Event::RejectCurated(uri),
             now_playing::Control::Quit => app::Event::Quit,
             // The same as the start's own restore: paused at the saved position, with the queue
             now_playing::Control::Restore(path) => match PlaybackFile::at(path).load() {
@@ -531,6 +539,7 @@ impl Deck {
                 self.player.send(Command::Restore { item, position });
             }
             Action::TogglePause => self.player.send(Command::TogglePause),
+            Action::Seek(position) => self.player.send(Command::Seek(position)),
             Action::Stop => self.player.send(Command::Stop),
             Action::Search(query) => {
                 let catalog = self.catalog.clone();

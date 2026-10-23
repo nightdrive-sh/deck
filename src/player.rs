@@ -157,6 +157,8 @@ pub enum Command {
         position: Duration,
     },
     TogglePause,
+    /// Jumps to this position in the playing track; a paused track stays paused.
+    Seek(Duration),
     Stop,
 }
 
@@ -336,6 +338,30 @@ impl Worker {
                 Some(_) => self.librespot.play(),
                 None => self.librespot.pause(),
             },
+            Command::Seek(position) if self.current.is_some() => {
+                let position = u32::try_from(position.as_millis()).unwrap_or(u32::MAX);
+                match self.paused {
+                    // As with resuming: a closed session gets no track data, so the track is
+                    // reloaded there, still paused.
+                    Some(_) if self.session.is_invalid() => {
+                        if let Some(track) = self.current.clone() {
+                            self.load(
+                                track,
+                                Start {
+                                    play: false,
+                                    position,
+                                },
+                            )
+                            .await;
+                        }
+                    }
+                    Some(_) => {
+                        self.paused = Some(position);
+                        self.librespot.seek(position);
+                    }
+                    None => self.librespot.seek(position),
+                }
+            }
             Command::Stop => self.stop(),
             _ => {}
         }
@@ -443,6 +469,11 @@ impl Worker {
             PlayerEvent::Playing { position_ms, .. } => {
                 self.paused = None;
                 self.emit(Event::Position(position_ms));
+            }
+            // A seek while paused must not read as playing (`Event::Position` means it plays).
+            PlayerEvent::Seeked { position_ms, .. } if self.paused.is_some() => {
+                self.paused = Some(position_ms);
+                self.emit(Event::Paused(position_ms));
             }
             PlayerEvent::PositionChanged { position_ms, .. }
             | PlayerEvent::Seeked { position_ms, .. }
