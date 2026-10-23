@@ -233,6 +233,12 @@ pub enum Action {
     QueueAlbum(Album),
     /// Pick for me: fetch the album's tracks for the front of the queue (`Event::AlbumPicked`).
     PickAlbum(Album),
+    /// Put the album in the history (`history.json`), with the time.
+    RecordHistory {
+        uri: String,
+        name: String,
+        artist: String,
+    },
     /// Fetch the album's (URI) details and tracks for the queue, or only `track` (URI) of them.
     QueueRemote {
         album: String,
@@ -700,37 +706,56 @@ impl State {
         std::mem::take(&mut self.listened_dirty).then_some(&self.listened)
     }
 
-    /// Counts the playing track once half of it has played, for its album (`listened`).
-    fn count_listened(&mut self, now: Instant) {
-        let Some(playing) = &self.now_playing else {
-            return;
-        };
+    /// Counts the playing track once half of it has played, for its album (`listened`), and
+    /// puts the album in the history.
+    fn count_listened(&mut self, now: Instant) -> Option<Action> {
+        let playing = self.now_playing.as_ref()?;
         if playing.uri.is_empty()
             || self.counted.as_deref() == Some(playing.uri.as_str())
             || playing.elapsed(now) * 2 < playing.duration
         {
-            return;
+            return None;
         }
         let track = playing.uri.clone();
+        // The album's URI and track count (0 when unknown), and its name and artist for the
+        // history (the track's own when Deck knows no better)
+        let named = |album: Option<&Album>| match album {
+            Some(album) => (album.name.clone(), album.artist.clone()),
+            None => (playing.album.clone(), playing.artist.clone()),
+        };
         let playback = &self.playback;
         let album = match playback.current.as_ref() {
-            Some(Current::Album) => playback.album.as_ref().map(|a| (a.uri.clone(), a.len)),
-            Some(Current::Queued(queued)) => Some((queued.album_uri.clone(), 0)),
+            Some(Current::Album) => playback
+                .album
+                .as_ref()
+                .map(|a| (a.uri.clone(), a.len, named(a.album.as_ref()))),
+            Some(Current::Queued(queued)) => {
+                Some((queued.album_uri.clone(), 0, named(queued.album.as_deref())))
+            }
             Some(Current::Radio) => playback
                 .radio
                 .as_ref()
                 .and_then(|radio| radio.tracks.get(radio.index))
-                .map(|t| (t.album.uri.clone(), 0)),
+                .map(|t| {
+                    (
+                        t.album.uri.clone(),
+                        0,
+                        (t.album.name.clone(), t.artist.clone()),
+                    )
+                }),
             None => None,
         };
         self.counted = Some(track.clone());
-        let Some((album, len)) = album.filter(|(uri, _)| !uri.is_empty()) else {
-            return;
-        };
+        let (album, len, (name, artist)) = album.filter(|(uri, ..)| !uri.is_empty())?;
         let length = listened::learn_length(&mut self.listened, &album, len);
         if listened::played(&mut self.listened, &album, &track) || length {
             self.listened_dirty = true;
         }
+        Some(Action::RecordHistory {
+            uri: album,
+            name,
+            artist,
+        })
     }
 
     /// An album's track count, learnt when its tracks arrive.
@@ -1019,7 +1044,7 @@ impl State {
         if actions.iter().any(|a| matches!(a, Action::Play(_))) {
             self.restoring = false;
         }
-        self.count_listened(now);
+        actions.extend(self.count_listened(now));
         // Playback also shrinks the queue: the queue view's selection stays in the list.
         let len = self.playback.queue.len();
         for view in &mut self.views {
@@ -4604,9 +4629,17 @@ mod tests {
         app.state.listened_changed();
         app.send(started("Smells Like Teen Spirit"));
         app.send(Event::Player(player::Event::Position(0)));
-        app.wait(99_000);
+        assert!(app.wait(99_000).is_empty());
         assert!(app.state.listened_changed().is_none(), "not halfway yet");
-        app.wait(2_000);
+        // Halfway: counted, and the album goes in the history
+        assert_eq!(
+            app.wait(2_000),
+            [Action::RecordHistory {
+                uri: "spotify:album:nevermind".into(),
+                name: "Nevermind".into(),
+                artist: "Nirvana".into(),
+            }]
+        );
         assert!(app.state.listened_changed().is_some());
         app.wait(50_000);
         assert!(

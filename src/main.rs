@@ -5,6 +5,7 @@ mod curate;
 mod curate_run;
 mod genre_cli;
 mod genres;
+mod history;
 mod lastfm;
 mod listened;
 mod lists;
@@ -416,6 +417,7 @@ async fn run(headless: bool) -> Result<()> {
         playback,
         picked,
         listened,
+        history: history::HistoryFile::default_path()?,
         results,
         media,
     };
@@ -586,6 +588,7 @@ struct Deck {
     playback: PlaybackFile,
     picked: picks::PickedFile,
     listened: listened::ListenedFile,
+    history: history::HistoryFile,
     results: UnboundedSender<app::Event>,
     /// macOS Now Playing; `None` elsewhere or if the helper process did not start.
     media: Option<now_playing::Session>,
@@ -657,6 +660,20 @@ impl Deck {
                         result,
                     }
                 });
+            }
+            Action::RecordHistory { uri, name, artist } => {
+                let at = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(0, |d| d.as_secs());
+                let played = history::Played {
+                    uri,
+                    name,
+                    artist,
+                    at,
+                };
+                if let Err(e) = self.history.record(played) {
+                    log::warn!("{e:#}");
+                }
             }
             Action::PickAlbum(album) => {
                 let catalog = self.catalog.clone();

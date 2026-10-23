@@ -312,6 +312,9 @@ genre radio (`radio`: its `genre` id, `name` and `tracks` from the playing one o
 
 Deck also keeps which albums you have listened to (`~/.local/state/deck/listened.json`, for a window to show): a
 track counts once half of it has played, and an album is listened once half of its tracks have (`listened: true`).
+And what you have played lately, album by album, newest first (`~/.local/state/deck/history.json`): an album goes in
+when one of its tracks has played halfway, playing it again within a few hours only moves it up, and entries older than
+30 days are dropped.
 
 For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
 its album), `deck artist-albums --json <artist id>` and `deck album-tracks --json <spotify:album:…>`
