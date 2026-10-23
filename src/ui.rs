@@ -2495,6 +2495,7 @@ mod tests {
         state.update(
             Event::AlbumQueued {
                 album: album("long", "A Very Long Album Name Indeed", "X", None),
+                track: None,
                 result: Ok(nevermind_tracks()),
             },
             later,

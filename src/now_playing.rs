@@ -55,6 +55,24 @@ pub struct Info {
     /// Whether the track is liked; `None` when likes are not available.
     #[serde(default)]
     pub liked: Option<bool>,
+    /// The playing track's URI, and its album's when it plays from an album (also from the
+    /// queue): a window marks them in its lists.
+    #[serde(default)]
+    pub track_uri: Option<String>,
+    #[serde(default)]
+    pub album_uri: Option<String>,
+    /// What plays next, in order (the playing track is not included).
+    #[serde(default)]
+    pub queue: Vec<QueuedInfo>,
+}
+
+/// A queued track in [`Info`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QueuedInfo {
+    pub uri: String,
+    pub title: String,
+    pub artist: String,
+    pub duration_ms: u64,
 }
 
 /// A media key or a Control Center button.
@@ -96,9 +114,10 @@ impl Command {
 }
 
 /// What the running Deck can be told: a media key, an album to play (`deck ctl play-album <uri>`),
-/// a search to open (`deck ctl search <query>`), e.g. from a desktop launcher, or a saved playback
-/// state to go back to (`deck ctl restore <file>`). It travels as one line over the control socket
-/// and the helper's stdout.
+/// a search to open (`deck ctl search <query>`), e.g. from a desktop launcher, a saved playback
+/// state to go back to (`deck ctl restore <file>`), or what a window built on `deck serve` needs:
+/// the queue, the shelf and quitting. It travels as one line over the control socket and the
+/// helper's stdout.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Control {
     Media(Command),
@@ -112,6 +131,20 @@ pub enum Control {
     /// A copy of `playback.json`, by its absolute path: the running Deck may have another
     /// working directory than the command that asks.
     Restore(PathBuf),
+    /// Add the album to the end of the queue (`deck ctl queue-album <uri>`).
+    QueueAlbum(String),
+    /// Add one track of the album to the end of the queue (`deck ctl queue-song <track> <album>`).
+    QueueSong {
+        track: String,
+        album: String,
+    },
+    /// Remove the queue's track at this position, from 0 (`deck ctl unqueue <n>`).
+    Unqueue(usize),
+    /// Put the album on the shelf, or take it off (`deck ctl shelf-add|shelf-remove <uri>`).
+    ShelfAdd(String),
+    ShelfRemove(String),
+    /// Save the playback state and exit (`deck ctl quit`), e.g. to end `deck serve`.
+    Quit,
 }
 
 impl Control {
@@ -138,6 +171,27 @@ impl Control {
                 _ => None,
             };
         }
+        if let Some(uri) = line.strip_prefix("queue-album ") {
+            return album_uri(uri).map(Self::QueueAlbum);
+        }
+        if let Some(rest) = line.strip_prefix("queue-song ") {
+            return match Self::parse(&format!("play-song {rest}")) {
+                Some(Self::PlaySong { track, album }) => Some(Self::QueueSong { track, album }),
+                _ => None,
+            };
+        }
+        if let Some(index) = line.strip_prefix("unqueue ") {
+            return index.trim().parse().ok().map(Self::Unqueue);
+        }
+        if let Some(uri) = line.strip_prefix("shelf-add ") {
+            return album_uri(uri).map(Self::ShelfAdd);
+        }
+        if let Some(uri) = line.strip_prefix("shelf-remove ") {
+            return album_uri(uri).map(Self::ShelfRemove);
+        }
+        if line == "quit" {
+            return Some(Self::Quit);
+        }
         if let Some(path) = line.strip_prefix("restore ") {
             let path = PathBuf::from(path.trim());
             return path.is_absolute().then_some(Self::Restore(path));
@@ -158,8 +212,20 @@ impl Control {
             // One line on the wire: a pasted newline must not split the query.
             Self::Search(query) => format!("search {}", query.replace(['\n', '\r'], " ")),
             Self::Restore(path) => format!("restore {}", path.display()),
+            Self::QueueAlbum(uri) => format!("queue-album {uri}"),
+            Self::QueueSong { track, album } => format!("queue-song {track} {album}"),
+            Self::Unqueue(index) => format!("unqueue {index}"),
+            Self::ShelfAdd(uri) => format!("shelf-add {uri}"),
+            Self::ShelfRemove(uri) => format!("shelf-remove {uri}"),
+            Self::Quit => "quit".to_owned(),
         }
     }
+}
+
+/// An album URI argument, trimmed; `None` for anything else.
+fn album_uri(uri: &str) -> Option<String> {
+    let uri = uri.trim();
+    uri.starts_with("spotify:album:").then(|| uri.to_owned())
 }
 
 /// Deck's side: the helper process that is told the playing track and sends the keys.
@@ -221,6 +287,9 @@ impl Drop for Session {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
+        // The killed helper could not clean up: a socket left behind would look like a running Deck.
+        #[cfg(target_os = "linux")]
+        linux::remove_files();
     }
 }
 
@@ -283,6 +352,17 @@ pub fn send_control(_control: Control) -> Result<()> {
     anyhow::bail!("deck ctl is only available on Linux")
 }
 
+/// Whether another Deck answers on the control socket (Linux; elsewhere always `false`).
+#[cfg(target_os = "linux")]
+pub fn running() -> bool {
+    std::os::unix::net::UnixStream::connect(linux::socket_path()).is_ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn running() -> bool {
+    false
+}
+
 #[cfg(target_os = "linux")]
 pub use linux::serve;
 
@@ -315,7 +395,7 @@ mod linux {
             .join("deck")
     }
 
-    fn socket_path() -> PathBuf {
+    pub(super) fn socket_path() -> PathBuf {
         runtime_dir().join("control.sock")
     }
 
@@ -396,9 +476,14 @@ mod linux {
             apply(&mut controls, info.as_ref());
             write_state(info.as_ref());
         }
+        remove_files();
+        Ok(())
+    }
+
+    /// Removes the control socket and the state file.
+    pub(super) fn remove_files() {
         let _ = std::fs::remove_file(socket_path());
         let _ = std::fs::remove_file(state_path());
-        Ok(())
     }
 
     fn apply(controls: &mut MediaControls, info: Option<&Info>) {
@@ -644,6 +729,9 @@ mod tests {
             playing,
             cover: None,
             liked: None,
+            track_uri: None,
+            album_uri: None,
+            queue: Vec::new(),
         }
     }
 
@@ -731,6 +819,23 @@ mod tests {
         );
         assert_eq!(Control::parse("restore playback.json"), None);
         assert_eq!(Control::parse("restore "), None);
+        let window = [
+            Control::QueueAlbum("spotify:album:a".to_owned()),
+            Control::QueueSong {
+                track: "spotify:track:t".to_owned(),
+                album: "spotify:album:a".to_owned(),
+            },
+            Control::Unqueue(3),
+            Control::ShelfAdd("spotify:album:a".to_owned()),
+            Control::ShelfRemove("spotify:album:a".to_owned()),
+            Control::Quit,
+        ];
+        for control in window {
+            assert_eq!(Control::parse(&control.line()), Some(control));
+        }
+        assert_eq!(Control::parse("queue-album spotify:track:t"), None);
+        assert_eq!(Control::parse("unqueue first"), None);
+        assert_eq!(Control::parse("shelf-add "), None);
     }
 
     #[test]

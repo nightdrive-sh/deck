@@ -285,14 +285,28 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 - `deck ctl play-album <spotify:album:…>` opens an album and plays it.
 - `deck ctl play-song <spotify:track:…> <spotify:album:…>` opens the song's album and plays it from the song.
 - `deck ctl search <query>` opens the search with the results.
+- `deck ctl queue-album <spotify:album:…>` adds an album to the end of the queue, and
+  `deck ctl queue-song <spotify:track:…> <spotify:album:…>` one song of it. `deck ctl unqueue <n>` removes the
+  queue's track at position n, counting from 0.
+- `deck ctl shelf-add <spotify:album:…>` puts an album on your shelf, `deck ctl shelf-remove <spotify:album:…>`
+  takes it off.
+- `deck ctl quit` saves what is playing and quits, as `q` does.
 - `deck ctl restore <file>` goes back to a saved playback state: a copy of
   `~/.local/state/deck/playback.json`, by its absolute path. The album or radio, the track, the position and the
   queue come back as when Deck starts, paused; `deck ctl play` goes on. A script can keep the file before it plays
   something else and put things back after.
 
+The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`) and
+the queue (`queue`: each track's `uri`, `title`, `artist` and `duration_ms`).
+
 For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
-its album) and `deck artist-albums --json <artist id>` print JSON without a running Deck (they
-need `client_id`).
+its album), `deck artist-albums --json <artist id>` and `deck album-tracks --json <spotify:album:…>`
+(the album and its tracks) print JSON without a running Deck (they need `client_id`).
+
+`deck serve` (Linux) plays without the screen, for a window of your own: it takes the
+commands above and keeps the state file up to date, and SIGTERM, Ctrl+C or `deck ctl quit`
+ends it, saving what was playing. Errors go to its log. Only one Deck runs at a time: a
+second one, in the terminal or as `deck serve`, says so and quits.
 Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
 `~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.
 [Nightdrive](https://github.com/nightdrive-sh/nightdrive) uses all of these for its top bar and

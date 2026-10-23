@@ -50,10 +50,14 @@ const TICK: Duration = Duration::from_millis(100);
 
 const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
-                     | ctl <toggle|play|pause|next|previous|like> \
+                     | serve \
+                     | ctl <toggle|play|pause|next|previous|like|quit> \
                      | ctl play-album <uri> | ctl play-song <track uri> <album uri> \
+                     | ctl queue-album <uri> | ctl queue-song <track uri> <album uri> \
+                     | ctl unqueue <n> | ctl shelf-add <uri> | ctl shelf-remove <uri> \
                      | ctl search <query> | ctl restore <file> \
                      | search --json <query> | artist-albums --json <artist id> \
+                     | album-tracks --json <album uri> \
                      | --help | --version]";
 
 /// What the command line asks for.
@@ -61,6 +65,9 @@ const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
 enum Mode {
     /// Plain `deck`: the player and the UI.
     Deck,
+    /// `deck serve`: the player without the UI, for a window that talks to it with `deck ctl`
+    /// and reads the state file (Linux).
+    Serve,
     Taste,
     /// The Curated run (`curate_run`).
     Curate,
@@ -77,6 +84,8 @@ enum Mode {
     SearchJson(String),
     /// `deck artist-albums --json <artist id>`: the artist's albums as JSON.
     ArtistAlbumsJson(String),
+    /// `deck album-tracks --json <album uri>`: the album and its tracks as JSON.
+    AlbumTracksJson(String),
     /// `--help` / `-h`: usage to stdout.
     Help,
     /// `--version` / `-V`.
@@ -113,29 +122,20 @@ impl Mode {
             ["genre", "list"] => Ok(Self::Genre(GenreCommand::List)),
             ["genre", "prompt"] => Ok(Self::Genre(GenreCommand::Prompt)),
             ["now-playing"] => Ok(Self::NowPlaying),
-            ["ctl", "play-album", uri] => now_playing::Control::parse(&format!("play-album {uri}"))
-                .map(Self::Ctl)
-                .ok_or(USAGE),
-            ["ctl", "play-song", track, album] => {
-                now_playing::Control::parse(&format!("play-song {track} {album}"))
-                    .map(Self::Ctl)
-                    .ok_or(USAGE)
-            }
-            ["ctl", "restore", path] => now_playing::Control::parse(&format!("restore {path}"))
-                .map(Self::Ctl)
-                .ok_or(USAGE),
+            ["serve"] => Ok(Self::Serve),
             ["search", "--json", query @ ..] if !query.is_empty() => {
                 Ok(Self::SearchJson(query.join(" ")))
             }
             ["artist-albums", "--json", id] => Ok(Self::ArtistAlbumsJson((*id).to_owned())),
-            ["ctl", "search", query @ ..] if !query.is_empty() => {
-                now_playing::Control::parse(&format!("search {}", query.join(" ")))
+            ["album-tracks", "--json", uri] if uri.starts_with("spotify:album:") => {
+                Ok(Self::AlbumTracksJson((*uri).to_owned()))
+            }
+            // The command as one line, as it travels over the control socket.
+            ["ctl", command @ ..] if !command.is_empty() => {
+                now_playing::Control::parse(&command.join(" "))
                     .map(Self::Ctl)
                     .ok_or(USAGE)
             }
-            ["ctl", command] => now_playing::Command::parse(command)
-                .map(|command| Self::Ctl(now_playing::Control::Media(command)))
-                .ok_or(USAGE),
             ["--help" | "-h"] => Ok(Self::Help),
             ["--version" | "-V"] => Ok(Self::Version),
             ["genre", ..] => Err(genre_cli::USAGE),
@@ -210,7 +210,11 @@ async fn run_mode(mode: Mode) -> Result<()> {
     match mode {
         Mode::Deck => {
             init_logging();
-            run().await
+            run(false).await
+        }
+        Mode::Serve => {
+            init_logging();
+            run(true).await
         }
         Mode::Taste => {
             init_stderr_logging();
@@ -249,6 +253,26 @@ async fn run_mode(mode: Mode) -> Result<()> {
             );
             Ok(())
         }
+        Mode::AlbumTracksJson(uri) => {
+            init_stderr_logging();
+            let catalog = Catalog::connect_stored(&Config::load()?).await?;
+            let id = uri.strip_prefix("spotify:album:").unwrap_or(&uri);
+            let (album, tracks) = tokio::try_join!(catalog.album(id), catalog.album_tracks(id))?;
+            let tracks: Vec<_> = tracks
+                .iter()
+                .map(|t| {
+                    serde_json::json!({
+                        "uri": t.uri, "name": t.name, "artist": t.artist,
+                        "duration_ms": t.duration.as_millis() as u64,
+                    })
+                })
+                .collect();
+            println!(
+                "{}",
+                serde_json::json!({ "album": album, "tracks": tracks })
+            );
+            Ok(())
+        }
         Mode::Curate => {
             init_stderr_logging();
             curate_run::run()
@@ -276,8 +300,16 @@ async fn run_mode(mode: Mode) -> Result<()> {
 }
 
 /// Signs in before the UI: a failed sign-in ends the program with a clear message.
-/// After that, errors are shown in the UI.
-async fn run() -> Result<()> {
+/// After that, errors are shown in the UI. `headless` (`deck serve`) plays without the UI:
+/// a window drives it with `deck ctl` and follows the state file, and errors go to the log.
+async fn run(headless: bool) -> Result<()> {
+    // Two players would fight over the control socket and the saved playback state.
+    if now_playing::running() {
+        anyhow::bail!("Deck is already running (`deck ctl quit` ends it)");
+    }
+    if headless && !cfg!(target_os = "linux") {
+        anyhow::bail!("deck serve is only available on Linux");
+    }
     let config = Config::load()?;
     // The user's own genres before anything reads the genre list; a broken file shows
     // up as an error, and Deck shows only the catalog.
@@ -342,28 +374,47 @@ async fn run() -> Result<()> {
     }
 
     let stderr = StderrToLog::start();
-    let mut terminal = ratatui::init();
-    let outcome = event_loop(&mut terminal, state, deck, player_events, results_rx).await;
-    ratatui::restore();
+    let outcome = if headless {
+        event_loop(None, state, deck, player_events, results_rx).await
+    } else {
+        let mut terminal = ratatui::init();
+        let outcome = event_loop(Some(&mut terminal), state, deck, player_events, results_rx).await;
+        ratatui::restore();
+        outcome
+    };
     drop(stderr);
     outcome
 }
 
 /// Feeds key presses, player events, action results and ticks into `State::update`
-/// and carries out the actions it returns.
+/// and carries out the actions it returns. Without a terminal (`deck serve`) there are no
+/// keys and nothing is drawn, and SIGTERM or Ctrl+C quits as `q` does.
 async fn event_loop(
-    terminal: &mut DefaultTerminal,
+    mut terminal: Option<&mut DefaultTerminal>,
     mut state: State,
     mut deck: Deck,
     mut player_events: UnboundedReceiver<player::Event>,
     mut results: UnboundedReceiver<app::Event>,
 ) -> Result<()> {
-    let mut input = spawn_input_reader();
+    let mut input = match terminal {
+        Some(_) => spawn_input_reader(),
+        None => mpsc::unbounded_channel().1,
+    };
+    let mut quit = quit_signals(terminal.is_none())?;
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut error = None;
 
     loop {
-        terminal.draw(|frame| ui::draw(frame, &state, Instant::now()))?;
+        if let Some(terminal) = terminal.as_deref_mut() {
+            terminal.draw(|frame| ui::draw(frame, &state, Instant::now()))?;
+        } else if state.error != error {
+            // Nobody sees the UI's error line: the log keeps it.
+            error.clone_from(&state.error);
+            if let Some(message) = &error {
+                log::warn!("{message}");
+            }
+        }
         let event = tokio::select! {
             Some(key) = input.recv() => match key {
                 Some(key) => app::Event::Key(key),
@@ -372,6 +423,7 @@ async fn event_loop(
             },
             Some(event) = player_events.recv() => app::Event::Player(event),
             Some(event) = results.recv() => event,
+            Some(()) = quit.recv() => app::Event::Quit,
             _ = tick.tick() => app::Event::Tick,
         };
         let now = Instant::now();
@@ -391,6 +443,32 @@ async fn event_loop(
     }
 }
 
+/// SIGTERM and Ctrl+C for `deck serve`, which has no `q` key; the TUI gets neither (`None`).
+fn quit_signals(headless: bool) -> Result<UnboundedReceiver<()>> {
+    let (sender, receiver) = mpsc::unbounded_channel();
+    if !headless {
+        return Ok(receiver);
+    }
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let mut term = signal(SignalKind::terminate()).context("cannot listen for SIGTERM")?;
+        let mut int = signal(SignalKind::interrupt()).context("cannot listen for SIGINT")?;
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = term.recv() => {}
+                    _ = int.recv() => {}
+                }
+                if sender.send(()).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+    Ok(receiver)
+}
+
 /// macOS Now Playing and media keys. If the helper process does not start, Deck works
 /// without them.
 fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playing::Session> {
@@ -406,6 +484,17 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
                 app::Event::PlaySong { track, album }
             }
             now_playing::Control::Search(query) => app::Event::Search(query),
+            now_playing::Control::QueueAlbum(album) => {
+                app::Event::QueueRemote { album, track: None }
+            }
+            now_playing::Control::QueueSong { track, album } => app::Event::QueueRemote {
+                album,
+                track: Some(track),
+            },
+            now_playing::Control::Unqueue(index) => app::Event::Unqueue(index),
+            now_playing::Control::ShelfAdd(uri) => app::Event::Shelve { uri, on: true },
+            now_playing::Control::ShelfRemove(uri) => app::Event::Shelve { uri, on: false },
+            now_playing::Control::Quit => app::Event::Quit,
             // The same as the start's own restore: paused at the saved position, with the queue
             now_playing::Control::Restore(path) => match PlaybackFile::at(path).load() {
                 Ok(Some(saved)) => app::Event::Restore(Box::new(saved)),
@@ -492,7 +581,35 @@ impl Deck {
                         .album_tracks(&album.id)
                         .await
                         .map_err(failed("could not queue the album"));
-                    app::Event::AlbumQueued { album, result }
+                    app::Event::AlbumQueued {
+                        album,
+                        track: None,
+                        result,
+                    }
+                });
+            }
+            Action::QueueRemote { album: uri, track } => {
+                let catalog = self.catalog.clone();
+                self.spawn(async move {
+                    let id = uri
+                        .strip_prefix("spotify:album:")
+                        .unwrap_or(&uri)
+                        .to_owned();
+                    let what = if track.is_some() {
+                        "could not queue the song"
+                    } else {
+                        "could not queue the album"
+                    };
+                    let album = match catalog.album(&id).await {
+                        Ok(album) => album,
+                        Err(e) => return app::Event::Error(failed(what)(e)),
+                    };
+                    let result = catalog.album_tracks(&id).await.map_err(failed(what));
+                    app::Event::AlbumQueued {
+                        album,
+                        track,
+                        result,
+                    }
                 });
             }
             Action::AddToShelf(album) => {

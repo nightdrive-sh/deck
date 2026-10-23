@@ -122,11 +122,28 @@ pub enum Event {
         uri: String,
         result: Result<Vec<Track>, String>,
     },
-    /// Result of `Action::QueueAlbum`: the album's tracks for the queue.
+    /// Result of `Action::QueueAlbum` and `Action::QueueRemote`: the album's tracks for the
+    /// queue, or only `track` (URI) of them.
     AlbumQueued {
         album: Album,
+        track: Option<String>,
         result: Result<Vec<Track>, String>,
     },
+    /// `deck ctl queue-album <uri>` and `queue-song <track> <album>`: the album, or that
+    /// track of it, to the end of the queue.
+    QueueRemote {
+        album: String,
+        track: Option<String>,
+    },
+    /// `deck ctl unqueue <n>`: remove the queue's track at that position.
+    Unqueue(usize),
+    /// `deck ctl shelf-add|shelf-remove <uri>`: put the album (URI) on the shelf or take it off.
+    Shelve {
+        uri: String,
+        on: bool,
+    },
+    /// `deck ctl quit`.
+    Quit,
     /// Result of `Action::FetchAlbum`.
     AlbumFetched {
         uri: String,
@@ -190,6 +207,11 @@ pub enum Action {
     FetchAlbum(String),
     /// Fetch the album's tracks for the queue.
     QueueAlbum(Album),
+    /// Fetch the album's (URI) details and tracks for the queue, or only `track` (URI) of them.
+    QueueRemote {
+        album: String,
+        track: Option<String>,
+    },
     AddToShelf(Album),
     /// Remove the album (URI) from the shelf.
     RemoveFromShelf(String),
@@ -806,7 +828,27 @@ impl State {
             }
             Event::AlbumTracks { uri, result } => self.album_tracks(&uri, result),
             Event::AlbumFetched { uri, result } => self.album_fetched(&uri, result),
-            Event::AlbumQueued { album, result } => self.album_queued(&album, result, now),
+            Event::AlbumQueued {
+                album,
+                track,
+                result,
+            } => self.album_queued(&album, track.as_deref(), result, now),
+            Event::QueueRemote { album, track } => vec![Action::QueueRemote { album, track }],
+            Event::Unqueue(index) => {
+                if index < self.playback.queue.len() {
+                    self.playback.queue.remove(index);
+                }
+                Vec::new()
+            }
+            // An album from elsewhere is fetched first for its year and artist, as from the radio.
+            Event::Shelve { uri, on: true } if !self.on_shelf(&uri) => {
+                vec![Action::AddRadioAlbumToShelf(uri)]
+            }
+            Event::Shelve { uri, on: false } if self.on_shelf(&uri) => {
+                vec![Action::RemoveFromShelf(uri)]
+            }
+            Event::Shelve { .. } => Vec::new(),
+            Event::Quit => vec![Action::Quit],
             Event::ArtistAlbums { artist_id, result } => {
                 self.artist_albums(&artist_id, result);
                 Vec::new()
@@ -995,6 +1037,23 @@ impl State {
             cover: playing.cover.clone(),
             liked: (self.likes.enabled && !playing.uri.is_empty())
                 .then(|| self.liked(&playing.uri)),
+            track_uri: (!playing.uri.is_empty()).then(|| playing.uri.clone()),
+            album_uri: match self.playback.current.as_ref() {
+                Some(Current::Album) => self.playback.album.as_ref().map(|a| a.uri.clone()),
+                Some(Current::Queued(track)) => Some(track.album_uri.clone()),
+                Some(Current::Radio) | None => None,
+            },
+            queue: self
+                .playback
+                .queue
+                .iter()
+                .map(|track| now_playing::QueuedInfo {
+                    uri: track.uri.clone(),
+                    title: track.name.clone(),
+                    artist: track.artist.clone(),
+                    duration_ms: millis(track.duration),
+                })
+                .collect(),
         })
     }
 
@@ -2064,19 +2123,33 @@ impl State {
     fn album_queued(
         &mut self,
         album: &Album,
+        only: Option<&str>,
         result: Result<Vec<Track>, String>,
         now: Instant,
     ) -> Vec<Action> {
         match result {
             Ok(tracks) => {
                 self.error = None;
+                let indices: Vec<usize> = (0..tracks.len())
+                    .filter(|&index| only.is_none_or(|uri| tracks[index].uri == uri))
+                    .collect();
+                if indices.is_empty() {
+                    self.error = Some("could not queue the song: it is not on its album".into());
+                    return Vec::new();
+                }
                 let mut actions = self
                     .likes
-                    .check(tracks.iter().map(|track| track.uri.as_str()));
-                let tracks = (0..tracks.len())
+                    .check(indices.iter().map(|&index| tracks[index].uri.as_str()));
+                // A song is confirmed by its own name, an album by the album's.
+                let name = match only {
+                    Some(_) => tracks[indices[0]].name.clone(),
+                    None => album.name.clone(),
+                };
+                let tracks = indices
+                    .into_iter()
                     .map(|index| queued(album, &tracks, index))
                     .collect();
-                actions.splice(0..0, self.enqueue(tracks, &album.name, now));
+                actions.splice(0..0, self.enqueue(tracks, &name, now));
                 actions
             }
             Err(message) => {
@@ -4127,6 +4200,7 @@ mod tests {
     fn queue_bleach(app: &mut App) -> Vec<Action> {
         app.send(Event::AlbumQueued {
             album: bleach(),
+            track: None,
             result: Ok(bleach_tracks()),
         })
     }
@@ -4209,10 +4283,91 @@ mod tests {
     }
 
     #[test]
+    fn remote_queue_takes_one_song_or_the_album_and_unqueue_removes() {
+        let mut app = nevermind_playing(0);
+        assert_eq!(
+            app.send(Event::QueueRemote {
+                album: bleach().uri,
+                track: None,
+            }),
+            [Action::QueueRemote {
+                album: bleach().uri,
+                track: None,
+            }]
+        );
+        let floyd = bleach_tracks()[1].uri.clone();
+        app.send(Event::AlbumQueued {
+            album: bleach(),
+            track: Some(floyd),
+            result: Ok(bleach_tracks()),
+        });
+        assert_eq!(queue_names(&app), ["Floyd The Barber"]);
+        assert_eq!(
+            app.state.notice(app.now),
+            Some((NoticeKind::Queued, "Floyd The Barber"))
+        );
+        queue_bleach(&mut app);
+        let info = app.state.now_playing_info(app.now).unwrap();
+        let titles: Vec<_> = info.queue.iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["Floyd The Barber", "Blew", "Floyd The Barber"]);
+        assert_eq!(info.album_uri.as_deref(), Some("spotify:album:nevermind"));
+
+        app.send(Event::Unqueue(0));
+        app.send(Event::Unqueue(9));
+        assert_eq!(queue_names(&app), ["Blew", "Floyd The Barber"]);
+
+        // A song that is not on the album queues nothing.
+        app.send(Event::AlbumQueued {
+            album: bleach(),
+            track: Some("spotify:track:nope".into()),
+            result: Ok(bleach_tracks()),
+        });
+        assert_eq!(queue_names(&app), ["Blew", "Floyd The Barber"]);
+        assert!(app.state.error.is_some());
+    }
+
+    #[test]
+    fn remote_shelf_changes_only_what_is_needed() {
+        let mut app = shelf_app();
+        let on = bleach().uri;
+        let off = unplugged().uri;
+        assert!(
+            app.send(Event::Shelve {
+                uri: on.clone(),
+                on: true
+            })
+            .is_empty()
+        );
+        assert_eq!(
+            app.send(Event::Shelve {
+                uri: on.clone(),
+                on: false
+            }),
+            [Action::RemoveFromShelf(on)]
+        );
+        assert_eq!(
+            app.send(Event::Shelve {
+                uri: off.clone(),
+                on: true
+            }),
+            [Action::AddRadioAlbumToShelf(off.clone())]
+        );
+        assert!(
+            app.send(Event::Shelve {
+                uri: off,
+                on: false
+            })
+            .is_empty()
+        );
+        assert_eq!(app.send(Event::Quit), [Action::Quit]);
+    }
+
+    #[test]
     fn failed_album_queueing_shows_error() {
         let mut app = nevermind_playing(0);
         let actions = app.send(Event::AlbumQueued {
             album: bleach(),
+            track: None,
             result: Err("could not queue the album: x".into()),
         });
         assert!(actions.is_empty());
@@ -4514,6 +4669,9 @@ mod tests {
             playing: true,
             cover: Some("https://i.scdn.co/image/everlong".into()),
             liked: None,
+            track_uri: Some("spotify:track:everlong".into()),
+            album_uri: None,
+            queue: Vec::new(),
         };
         assert_eq!(app.state.now_playing_info(app.now), Some(expected.clone()));
 
@@ -5662,6 +5820,7 @@ mod tests {
         let mut app = in_bloom_playing();
         let actions = app.send(Event::AlbumQueued {
             album: nevermind(),
+            track: None,
             result: Ok(nevermind_tracks()),
         });
         // Nothing was playing in the play order, so the queue starts playing.
