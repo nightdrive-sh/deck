@@ -318,6 +318,9 @@ its album), `deck artist-albums --json <artist id>` and `deck album-tracks --jso
 commands above and keeps the state file up to date, and SIGTERM, Ctrl+C or `deck ctl quit`
 ends it, saving what was playing. Errors go to its log and to the state file's `error`. Only one Deck runs at a time: a
 second one, in the terminal or as `deck serve`, says so and quits.
+A desktop that has such a window can offer it as a `deck-window` command on your `PATH`: then plain `deck`, in a
+graphical session, opens that window (which starts `deck serve` when no Deck plays), as an app's name does.
+`deck tui` always opens Deck's screen in the terminal.
 Deck's app icon for desktop launchers is `assets/deck.svg`: install it as
 `~/.local/share/icons/hicolor/scalable/apps/deck.svg` and use `Icon=deck` in a `.desktop` file.
 [Nightdrive](https://github.com/nightdrive-sh/nightdrive) uses all of these for its top bar and

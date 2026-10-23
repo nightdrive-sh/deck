@@ -49,7 +49,7 @@ use crate::{
 /// the elapsed time and the progress bar.
 const TICK: Duration = Duration::from_millis(100);
 
-const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
+const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
                      | serve \
                      | ctl <toggle|play|pause|next|previous|like|quit> \
@@ -67,8 +67,11 @@ const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 enum Mode {
-    /// Plain `deck`: the player and the UI.
+    /// Plain `deck`: the player and the UI, or a desktop's window for Deck when there is one
+    /// ([`desktop_window`]).
     Deck,
+    /// `deck tui`: the player and the UI in the terminal, window or not.
+    Tui,
     /// `deck serve`: the player without the UI, for a window that talks to it with `deck ctl`
     /// and reads the state file (Linux).
     Serve,
@@ -114,6 +117,7 @@ impl Mode {
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         match args.as_slice() {
             [] => Ok(Self::Deck),
+            ["tui"] => Ok(Self::Tui),
             ["taste"] => Ok(Self::Taste),
             ["curate"] => Ok(Self::Curate),
             ["curate", "submit"] => Ok(Self::CurateSubmit { dry_run: false }),
@@ -163,6 +167,12 @@ fn main() -> ExitCode {
             println!("deck {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
+        #[cfg(unix)]
+        Mode::Deck => {
+            if let Some(window) = desktop_window() {
+                return open_window(&window);
+            }
+        }
         Mode::Ctl(command) => {
             return match now_playing::send_control(command) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -194,6 +204,35 @@ fn main() -> ExitCode {
     }
 }
 
+/// What a desktop calls its window for Deck, which talks to `deck serve` (Nightdrive's does).
+#[cfg(unix)]
+const WINDOW_COMMAND: &str = "deck-window";
+
+/// A desktop's window for Deck: `deck-window` on `PATH`, in a graphical session. Plain `deck`
+/// opens it, as an app's name does; `deck tui` is always the terminal UI.
+#[cfg(unix)]
+fn desktop_window() -> Option<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none() {
+        return None;
+    }
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|dir| dir.join(WINDOW_COMMAND))
+        .find(|path| {
+            path.metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        })
+}
+
+/// Hands over to the window's command, which starts `deck serve` itself when no Deck plays.
+#[cfg(unix)]
+fn open_window(window: &std::path::Path) -> ExitCode {
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(window).exec();
+    eprintln!("deck: {}: {error}", window.display());
+    ExitCode::FAILURE
+}
+
 /// Prints the usage to stderr; exit code 2 as with invalid arguments.
 fn usage_error(usage: &str) -> ExitCode {
     eprintln!("{}", usage.trim_end());
@@ -212,7 +251,7 @@ fn now_playing() -> Result<()> {
 
 async fn run_mode(mode: Mode) -> Result<()> {
     match mode {
-        Mode::Deck => {
+        Mode::Deck | Mode::Tui => {
             init_logging();
             run(false).await
         }
@@ -1109,6 +1148,7 @@ mod tests {
     #[test]
     fn modes_from_arguments() {
         assert_eq!(mode(&[]), Some(Mode::Deck));
+        assert_eq!(mode(&["tui"]), Some(Mode::Tui));
         assert_eq!(mode(&["taste"]), Some(Mode::Taste));
         assert_eq!(mode(&["curate"]), Some(Mode::Curate));
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
