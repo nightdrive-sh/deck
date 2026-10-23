@@ -52,6 +52,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     catalog::{Album, Artist, LIKED_BATCH, SearchResults, Song, Track},
     genres::{self, Genre},
+    listened::{self, Listened},
     lists::AlbumList,
     now_playing::{self, Command as MediaCommand},
     picks::{self, PickFrom},
@@ -638,6 +639,11 @@ pub struct State {
     /// (`picked_changed`).
     picked: Vec<String>,
     picked_dirty: bool,
+    /// Albums listened to in Deck (`listened`), saved as they change (`listened_changed`).
+    listened: Listened,
+    listened_dirty: bool,
+    /// The track (URI) whose halfway point has been counted, so it counts once per play.
+    counted: Option<String>,
     /// Shown until the next action succeeds.
     pub error: Option<String>,
     /// An album asked for by `deck ctl play-album`, or a song's album from the search: it plays
@@ -674,10 +680,64 @@ impl State {
             play_on_load: None,
             picked: Vec::new(),
             picked_dirty: false,
+            listened: Listened::new(),
+            listened_dirty: false,
+            counted: None,
             play_from: None,
         };
         state.set_shelf(shelf);
         state
+    }
+
+    /// The listened albums read at startup.
+    pub fn with_listened(mut self, listened: Listened) -> Self {
+        self.listened = listened;
+        self
+    }
+
+    /// The listened albums to save, once after each change.
+    pub fn listened_changed(&mut self) -> Option<&Listened> {
+        std::mem::take(&mut self.listened_dirty).then_some(&self.listened)
+    }
+
+    /// Counts the playing track once half of it has played, for its album (`listened`).
+    fn count_listened(&mut self, now: Instant) {
+        let Some(playing) = &self.now_playing else {
+            return;
+        };
+        if playing.uri.is_empty()
+            || self.counted.as_deref() == Some(playing.uri.as_str())
+            || playing.elapsed(now) * 2 < playing.duration
+        {
+            return;
+        }
+        let track = playing.uri.clone();
+        let playback = &self.playback;
+        let album = match playback.current.as_ref() {
+            Some(Current::Album) => playback.album.as_ref().map(|a| (a.uri.clone(), a.len)),
+            Some(Current::Queued(queued)) => Some((queued.album_uri.clone(), 0)),
+            Some(Current::Radio) => playback
+                .radio
+                .as_ref()
+                .and_then(|radio| radio.tracks.get(radio.index))
+                .map(|t| (t.album.uri.clone(), 0)),
+            None => None,
+        };
+        self.counted = Some(track.clone());
+        let Some((album, len)) = album.filter(|(uri, _)| !uri.is_empty()) else {
+            return;
+        };
+        let length = listened::learn_length(&mut self.listened, &album, len);
+        if listened::played(&mut self.listened, &album, &track) || length {
+            self.listened_dirty = true;
+        }
+    }
+
+    /// An album's track count, learnt when its tracks arrive.
+    fn learn_length(&mut self, album: &str, tracks: usize) {
+        if listened::learn_length(&mut self.listened, album, tracks) {
+            self.listened_dirty = true;
+        }
     }
 
     /// Pick for me's history read at startup.
@@ -959,6 +1019,7 @@ impl State {
         if actions.iter().any(|a| matches!(a, Action::Play(_))) {
             self.restoring = false;
         }
+        self.count_listened(now);
         // Playback also shrinks the queue: the queue view's selection stays in the list.
         let len = self.playback.queue.len();
         for view in &mut self.views {
@@ -1365,6 +1426,7 @@ impl State {
             }
         };
         self.error = None;
+        self.learn_length(&album.uri, tracks.len());
         if !self.picked.contains(&album.uri) {
             self.picked.push(album.uri.clone());
             self.picked_dirty = true;
@@ -2264,6 +2326,9 @@ impl State {
     }
 
     fn album_tracks(&mut self, uri: &str, result: Result<Vec<Track>, String>) -> Vec<Action> {
+        if let Ok(tracks) = &result {
+            self.learn_length(uri, tracks.len());
+        }
         let mut actions = match &result {
             Ok(tracks) => self
                 .likes
@@ -2316,6 +2381,7 @@ impl State {
         match result {
             Ok(tracks) => {
                 self.error = None;
+                self.learn_length(&album.uri, tracks.len());
                 let indices: Vec<usize> = (0..tracks.len())
                     .filter(|&index| only.is_none_or(|uri| tracks[index].uri == uri))
                     .collect();
@@ -4528,6 +4594,39 @@ mod tests {
         });
         assert_eq!(actions, [play_track("Smells Like Teen Spirit")]);
         assert_eq!(queue_names(&app), ["In Bloom", "Come As You Are", "Breed"]);
+    }
+
+    #[test]
+    fn half_of_half_the_tracks_makes_an_album_listened() {
+        // Nevermind has four tracks (learnt when they arrived)
+        let mut app = nevermind_playing(0);
+        assert_eq!(app.state.listened["spotify:album:nevermind"].tracks, 4);
+        app.state.listened_changed();
+        app.send(started("Smells Like Teen Spirit"));
+        app.send(Event::Player(player::Event::Position(0)));
+        app.wait(99_000);
+        assert!(app.state.listened_changed().is_none(), "not halfway yet");
+        app.wait(2_000);
+        assert!(app.state.listened_changed().is_some());
+        app.wait(50_000);
+        assert!(
+            app.state.listened_changed().is_none(),
+            "a track counts once"
+        );
+        assert!(!app.state.listened["spotify:album:nevermind"].listened);
+        // A second track halfway: two of four
+        app.send(started("In Bloom"));
+        app.send(Event::Player(player::Event::Position(0)));
+        app.wait(101_000);
+        assert!(app.state.listened["spotify:album:nevermind"].listened);
+        // Paused, the time doesn't run
+        app.send(started("Come As You Are"));
+        app.send(Event::Player(player::Event::Paused(0)));
+        app.wait(150_000);
+        assert_eq!(
+            app.state.listened["spotify:album:nevermind"].played.len(),
+            2
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ mod curate_run;
 mod genre_cli;
 mod genres;
 mod lastfm;
+mod listened;
 mod lists;
 mod now_playing;
 mod picks;
@@ -378,8 +379,10 @@ async fn run(headless: bool) -> Result<()> {
         };
     let lists = CuratedFiles::default_paths()?;
     let picked = picks::PickedFile::default_path()?;
+    let listened = listened::ListenedFile::default_path()?;
     let mut state = State::new(shelf.albums().to_vec())
         .with_picked(picked.load())
+        .with_listened(listened.load())
         .with_favorites(favorite_ids(&favorites))
         .with_curated(curated_list(&lists))
         .with_likes(catalog.can_like());
@@ -412,6 +415,7 @@ async fn run(headless: bool) -> Result<()> {
         lists,
         playback,
         picked,
+        listened,
         results,
         media,
     };
@@ -482,6 +486,11 @@ async fn event_loop(
         }
         if let Some(played) = state.picked_changed()
             && let Err(e) = deck.picked.save(played)
+        {
+            log::warn!("{e:#}");
+        }
+        if let Some(listened) = state.listened_changed()
+            && let Err(e) = deck.listened.save(listened)
         {
             log::warn!("{e:#}");
         }
@@ -576,6 +585,7 @@ struct Deck {
     lists: CuratedFiles,
     playback: PlaybackFile,
     picked: picks::PickedFile,
+    listened: listened::ListenedFile,
     results: UnboundedSender<app::Event>,
     /// macOS Now Playing; `None` elsewhere or if the helper process did not start.
     media: Option<now_playing::Session>,

@@ -310,6 +310,9 @@ the queue (`queue`: each track's `uri`, `title`, `artist`, `duration_ms` and `al
 genre radio (`radio`: its `genre` id, `name` and `tracks` from the playing one on, each with `uri`, `title`,
 `artist`, `album` and `album_uri`) and Deck's latest error (`error`).
 
+Deck also keeps which albums you have listened to (`~/.local/state/deck/listened.json`, for a window to show): a
+track counts once half of it has played, and an album is listened once half of its tracks have (`listened: true`).
+
 For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
 its album), `deck artist-albums --json <artist id>` and `deck album-tracks --json <spotify:album:…>`
 (the album and its tracks) print JSON without a running Deck (they need `client_id`).
