@@ -83,6 +83,9 @@ Curated is built outside the app: `deck curate` runs Claude Code with `curate/pr
 - **Reread a user file before changing it** (see `Shelf::add`), so that edits made by
   hand while Deck is open are not overwritten.
 - **Secrets are owner-only**: `~/.cache/deck` is 0700 and sign-in files are 0600.
+- **Keep files small**: the code is written by Claude, so one module does one thing in
+  ~200–400 lines. Past ~600, split off what stands on its own (a submodule, a widget);
+  past ~800 it must be split. Plan a new feature in small files from the start.
 - Match the surrounding code: small functions, `anyhow` errors with context
   (`cannot open <path>`), and tests next to the code in `mod tests`.
 - Update `README.md` when keys, commands, files or setup change. The key table in the
