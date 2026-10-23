@@ -173,6 +173,8 @@ pub enum Control {
     Unqueue(usize),
     /// Empty the queue (`deck ctl queue-clear`).
     ClearQueue,
+    /// Pick for me: an album from the shelf, Curated or both (`deck ctl pick [shelf|curated]`).
+    Pick(crate::picks::PickFrom),
     /// Put the album on the shelf, or take it off (`deck ctl shelf-add|shelf-remove <uri>`).
     ShelfAdd(String),
     ShelfRemove(String),
@@ -252,6 +254,9 @@ impl Control {
         if line == "queue-clear" {
             return Some(Self::ClearQueue);
         }
+        if line == "pick" || line.starts_with("pick ") {
+            return crate::picks::PickFrom::parse(line["pick".len()..].trim()).map(Self::Pick);
+        }
         if let Some(path) = line.strip_prefix("restore ") {
             let path = PathBuf::from(path.trim());
             return path.is_absolute().then_some(Self::Restore(path));
@@ -276,6 +281,7 @@ impl Control {
             Self::QueueSong { track, album } => format!("queue-song {track} {album}"),
             Self::Unqueue(index) => format!("unqueue {index}"),
             Self::ClearQueue => "queue-clear".to_owned(),
+            Self::Pick(from) => format!("pick {}", from.word()).trim_end().to_owned(),
             Self::ShelfAdd(uri) => format!("shelf-add {uri}"),
             Self::ShelfRemove(uri) => format!("shelf-remove {uri}"),
             Self::Seek(ms) => format!("seek {ms}"),
@@ -902,6 +908,8 @@ mod tests {
             },
             Control::Unqueue(3),
             Control::ClearQueue,
+            Control::Pick(crate::picks::PickFrom::Any),
+            Control::Pick(crate::picks::PickFrom::Curated),
             Control::Seek(83_000),
             Control::Radio("indie-rock".to_owned()),
             Control::FavoriteAdd("lofi".to_owned()),
@@ -918,6 +926,8 @@ mod tests {
         assert_eq!(Control::parse("unqueue first"), None);
         assert_eq!(Control::parse("shelf-add "), None);
         assert_eq!(Control::parse("seek soon"), None);
+        assert_eq!(Control::parse("pick radio"), None);
+        assert_eq!(Control::parse("picked"), None);
         assert_eq!(Control::parse("radio "), None);
         assert_eq!(Control::parse("radio indie rock"), None);
         assert_eq!(Control::parse("curated-reject spotify:track:t"), None);

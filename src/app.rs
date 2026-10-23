@@ -54,6 +54,7 @@ use crate::{
     genres::{self, Genre},
     lists::AlbumList,
     now_playing::{self, Command as MediaCommand},
+    picks::{self, PickFrom},
     player::{self, Item},
     radio,
     shelf::{albums_of, artists_of, sort_by_year},
@@ -139,6 +140,8 @@ pub enum Event {
     Unqueue(usize),
     /// `deck ctl queue-clear`: empty the queue.
     ClearQueue,
+    /// `deck ctl pick [shelf|curated]`: Pick for me, an album not played in this round.
+    Pick(PickFrom),
     /// `deck ctl shelf-add|shelf-remove <uri>`: put the album (URI) on the shelf or take it off.
     Shelve {
         uri: String,
@@ -624,6 +627,10 @@ pub struct State {
     likes: Likes,
     /// State of the seed picker (xorshift). Tests can set it.
     rng: u64,
+    /// Albums played in Pick for me's current rounds (`picks`), saved as they change
+    /// (`picked_changed`).
+    picked: Vec<String>,
+    picked_dirty: bool,
     /// Shown until the next action succeeds.
     pub error: Option<String>,
     /// An album asked for by `deck ctl play-album`, or a song's album from the search: it plays
@@ -658,10 +665,18 @@ impl State {
             rng: genres::random() | 1,
             error: None,
             play_on_load: None,
+            picked: Vec::new(),
+            picked_dirty: false,
             play_from: None,
         };
         state.set_shelf(shelf);
         state
+    }
+
+    /// Pick for me's history read at startup.
+    pub fn with_picked(mut self, played: Vec<String>) -> Self {
+        self.picked = played;
+        self
     }
 
     /// Favourite genres read at startup.
@@ -859,6 +874,7 @@ impl State {
                 self.playback.queue.clear();
                 Vec::new()
             }
+            Event::Pick(from) => self.pick(from),
             // An album from elsewhere is fetched first for its year and artist, as from the radio.
             Event::Shelve { uri, on: true } if !self.on_shelf(&uri) => {
                 vec![Action::AddRadioAlbumToShelf(uri)]
@@ -959,6 +975,11 @@ impl State {
     /// saved then, so that not even a crash loses the state. The event loop calls this
     /// after every event, so the state is only built if some event may have changed it
     /// (`playback_dirty`).
+    /// Pick for me's history to save, once after each change.
+    pub fn picked_changed(&mut self) -> Option<&[String]> {
+        std::mem::take(&mut self.picked_dirty).then_some(self.picked.as_slice())
+    }
+
     pub fn playback_changed(&mut self) -> bool {
         if !std::mem::take(&mut self.playback_dirty) {
             return false;
@@ -1258,6 +1279,11 @@ impl State {
     /// this track.
     fn play_album(&mut self, album: Album, len: usize, track: usize) -> Vec<Action> {
         let uri = album.uri.clone();
+        // Every album that starts, picked or not, counts as played for Pick for me.
+        if !self.picked.contains(&uri) {
+            self.picked.push(uri.clone());
+            self.picked_dirty = true;
+        }
         // An album replaces the radio, including a pending fetch.
         self.radio_fetch = RadioFetch::default();
         let playback = &mut self.playback;
@@ -1271,6 +1297,39 @@ impl State {
             album: Some(album),
         });
         vec![Action::Play(Item::Album { uri, track })]
+    }
+
+    /// Pick for me: an album from the shelf or Curated (or both) that hasn't played in this
+    /// round and isn't playing now, which then plays as `deck ctl play-album` would.
+    fn pick(&mut self, from: PickFrom) -> Vec<Action> {
+        let shelf = self.shelf.iter().map(|album| album.uri.clone());
+        let curated = self
+            .curated
+            .iter()
+            .flat_map(|list| list.albums.iter().map(|entry| entry.album.uri.clone()));
+        let mut candidates: Vec<String> = match from {
+            PickFrom::Shelf => shelf.collect(),
+            PickFrom::Curated => curated.collect(),
+            PickFrom::Any => shelf.chain(curated).collect(),
+        };
+        candidates.dedup();
+        let playing = match self.playback.current.as_ref() {
+            Some(Current::Album) => self.playback.album.as_ref().map(|a| a.uri.clone()),
+            Some(Current::Queued(track)) => Some(track.album_uri.clone()),
+            Some(Current::Radio) | None => None,
+        };
+        let random = self.random();
+        let Some(uri) = picks::choose(&candidates, &mut self.picked, playing.as_deref(), random)
+        else {
+            self.error = Some(match from {
+                PickFrom::Curated => "nothing to pick from: there is no Curated list".into(),
+                _ => "nothing to pick from: your shelf is empty".into(),
+            });
+            return Vec::new();
+        };
+        // A new round may have taken the source's albums out of the history.
+        self.picked_dirty = true;
+        self.play_album_remote(uri)
     }
 
     /// Plays the radio from track `index`. The queue is kept and plays after this track.
@@ -4352,6 +4411,38 @@ mod tests {
             Some((NoticeKind::Queued, "Bleach"))
         );
         assert_eq!(app.state.error, None);
+    }
+
+    #[test]
+    fn pick_for_me_draws_every_shelf_album_once_before_repeating() {
+        let mut app = shelf_app();
+        let mut seen = Vec::new();
+        for _ in 0..5 {
+            let actions = app.send(Event::Pick(PickFrom::Shelf));
+            let [Action::LoadAlbumTracks(uri)] = actions.as_slice() else {
+                panic!("expected the album's tracks, got {actions:?}");
+            };
+            assert!(!seen.contains(uri), "{uri} came twice in a round");
+            seen.push(uri.clone());
+            // Its tracks arrive and it plays: then it counts as played
+            let album = app
+                .state
+                .shelf
+                .iter()
+                .find(|a| &a.uri == uri)
+                .unwrap()
+                .clone();
+            let played = app.send(album_tracks(&album, Ok(nevermind_tracks())));
+            assert!(matches!(played.as_slice(), [Action::Play(_)]), "{played:?}");
+            assert!(app.state.picked_changed().is_some());
+        }
+        // A new round, without the playing album first
+        let playing = seen.last().unwrap().clone();
+        let actions = app.send(Event::Pick(PickFrom::Shelf));
+        assert!(!matches!(actions.as_slice(), [Action::LoadAlbumTracks(uri)] if *uri == playing));
+        // Nothing in Curated to pick from
+        assert!(app.send(Event::Pick(PickFrom::Curated)).is_empty());
+        assert!(app.state.error.is_some());
     }
 
     #[test]

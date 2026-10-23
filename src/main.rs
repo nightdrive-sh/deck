@@ -8,6 +8,7 @@ mod genres;
 mod lastfm;
 mod lists;
 mod now_playing;
+mod picks;
 mod playback;
 mod player;
 mod radio;
@@ -54,7 +55,7 @@ const USAGE: &str = "usage: deck [taste | curate | curate submit [--dry-run] \
                      | ctl <toggle|play|pause|next|previous|like|quit> \
                      | ctl play-album <uri> | ctl play-song <track uri> <album uri> \
                      | ctl queue-album <uri> | ctl queue-song <track uri> <album uri> \
-                     | ctl unqueue <n> | ctl queue-clear | ctl shelf-add <uri> | ctl shelf-remove <uri> \
+                     | ctl unqueue <n> | ctl queue-clear | ctl pick [shelf|curated] | ctl shelf-add <uri> | ctl shelf-remove <uri> \
                      | ctl seek <ms> | ctl radio <genre id> \
                      | ctl favorite-add <genre id> | ctl favorite-remove <genre id> \
                      | ctl curated-reject <uri> \
@@ -337,7 +338,9 @@ async fn run(headless: bool) -> Result<()> {
             Err(e) => (Favorites::unavailable(), Some(format!("{e:#}"))),
         };
     let lists = CuratedFiles::default_paths()?;
+    let picked = picks::PickedFile::default_path()?;
     let mut state = State::new(shelf.albums().to_vec())
+        .with_picked(picked.load())
         .with_favorites(favorite_ids(&favorites))
         .with_curated(curated_list(&lists))
         .with_likes(catalog.can_like());
@@ -369,6 +372,7 @@ async fn run(headless: bool) -> Result<()> {
         favorites,
         lists,
         playback,
+        picked,
         results,
         media,
     };
@@ -437,6 +441,11 @@ async fn event_loop(
             }
             deck.perform(action);
         }
+        if let Some(played) = state.picked_changed()
+            && let Err(e) = deck.picked.save(played)
+        {
+            log::warn!("{e:#}");
+        }
         if state.playback_changed() {
             deck.save_playback(state.playback(now));
         }
@@ -496,6 +505,7 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
             },
             now_playing::Control::Unqueue(index) => app::Event::Unqueue(index),
             now_playing::Control::ClearQueue => app::Event::ClearQueue,
+            now_playing::Control::Pick(from) => app::Event::Pick(from),
             now_playing::Control::ShelfAdd(uri) => app::Event::Shelve { uri, on: true },
             now_playing::Control::ShelfRemove(uri) => app::Event::Shelve { uri, on: false },
             now_playing::Control::Seek(ms) => app::Event::Seek(Duration::from_millis(ms)),
@@ -526,6 +536,7 @@ struct Deck {
     favorites: Favorites,
     lists: CuratedFiles,
     playback: PlaybackFile,
+    picked: picks::PickedFile,
     results: UnboundedSender<app::Event>,
     /// macOS Now Playing; `None` elsewhere or if the helper process did not start.
     media: Option<now_playing::Session>,
