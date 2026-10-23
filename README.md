@@ -294,7 +294,8 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 - `deck ctl radio <genre id>` starts the genre's radio (the ids: `deck genre list`), and
   `deck ctl favorite-add <genre id>` / `favorite-remove <genre id>` puts a genre on the home page or takes it off.
 - `deck ctl pick [shelf|curated]` (Pick for me) plays an album from your shelf, Curated or both, at random but like
-  drawing from a hat: an album comes again only once all the others have played. Every album you play counts, and the
+  drawing from a hat: an album comes again only once all the others have played. The whole album goes to the front of
+  the queue and starts; what was queued plays after it. Every album you play counts, and the
   history is kept in `~/.local/state/deck/picked.json`.
 - `deck ctl curated-reject <spotify:album:…>` takes an album out of Curated, as Ctrl+D does there.
 - `deck ctl quit` saves what is playing and quits, as `q` does.

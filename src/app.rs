@@ -142,6 +142,11 @@ pub enum Event {
     ClearQueue,
     /// `deck ctl pick [shelf|curated]`: Pick for me, an album not played in this round.
     Pick(PickFrom),
+    /// Result of `Action::PickAlbum`: the picked album's tracks.
+    AlbumPicked {
+        album: Album,
+        result: Result<Vec<Track>, String>,
+    },
     /// `deck ctl shelf-add|shelf-remove <uri>`: put the album (URI) on the shelf or take it off.
     Shelve {
         uri: String,
@@ -225,6 +230,8 @@ pub enum Action {
     FetchAlbum(String),
     /// Fetch the album's tracks for the queue.
     QueueAlbum(Album),
+    /// Pick for me: fetch the album's tracks for the front of the queue (`Event::AlbumPicked`).
+    PickAlbum(Album),
     /// Fetch the album's (URI) details and tracks for the queue, or only `track` (URI) of them.
     QueueRemote {
         album: String,
@@ -875,6 +882,7 @@ impl State {
                 Vec::new()
             }
             Event::Pick(from) => self.pick(from),
+            Event::AlbumPicked { album, result } => self.album_picked(&album, result),
             // An album from elsewhere is fetched first for its year and artist, as from the radio.
             Event::Shelve { uri, on: true } if !self.on_shelf(&uri) => {
                 vec![Action::AddRadioAlbumToShelf(uri)]
@@ -1329,7 +1337,54 @@ impl State {
         };
         // A new round may have taken the source's albums out of the history.
         self.picked_dirty = true;
-        self.play_album_remote(uri)
+        let album = self
+            .shelf
+            .iter()
+            .chain(
+                self.curated
+                    .iter()
+                    .flat_map(|list| list.albums.iter().map(|e| &e.album)),
+            )
+            .find(|album| album.uri == uri)
+            .cloned();
+        album.map(Action::PickAlbum).into_iter().collect()
+    }
+
+    /// `Event::AlbumPicked`: the picked album's tracks go to the front of the queue, all of
+    /// them, and the first plays now; what was queued plays after the album.
+    fn album_picked(&mut self, album: &Album, result: Result<Vec<Track>, String>) -> Vec<Action> {
+        let tracks = match result {
+            Ok(tracks) if !tracks.is_empty() => tracks,
+            Ok(_) => {
+                self.error = Some(format!("{} has no tracks", album.name));
+                return Vec::new();
+            }
+            Err(message) => {
+                self.error = Some(message);
+                return Vec::new();
+            }
+        };
+        self.error = None;
+        if !self.picked.contains(&album.uri) {
+            self.picked.push(album.uri.clone());
+            self.picked_dirty = true;
+        }
+        let mut actions = self.likes.check(tracks.iter().map(|t| t.uri.as_str()));
+        let queued: Vec<QueuedTrack> = (0..tracks.len())
+            .map(|i| queued(album, &tracks, i))
+            .collect();
+        self.playback.queue.splice(0..0, queued);
+        // Nothing playing: the queue's first track starts as `next` would start it.
+        let play = if self.playback.current.is_some() {
+            self.next()
+        } else {
+            let track = self.playback.queue.remove(0);
+            let item = Item::Track(track.uri.clone());
+            self.playback.current = Some(Current::Queued(track));
+            Some(Action::Play(item))
+        };
+        actions.splice(0..0, play);
+        actions
     }
 
     /// Plays the radio from track `index`. The queue is kept and plays after this track.
@@ -4419,30 +4474,60 @@ mod tests {
         let mut seen = Vec::new();
         for _ in 0..5 {
             let actions = app.send(Event::Pick(PickFrom::Shelf));
-            let [Action::LoadAlbumTracks(uri)] = actions.as_slice() else {
-                panic!("expected the album's tracks, got {actions:?}");
+            let [Action::PickAlbum(album)] = actions.as_slice() else {
+                panic!("expected the picked album, got {actions:?}");
             };
-            assert!(!seen.contains(uri), "{uri} came twice in a round");
-            seen.push(uri.clone());
-            // Its tracks arrive and it plays: then it counts as played
-            let album = app
-                .state
-                .shelf
-                .iter()
-                .find(|a| &a.uri == uri)
-                .unwrap()
-                .clone();
-            let played = app.send(album_tracks(&album, Ok(nevermind_tracks())));
-            assert!(matches!(played.as_slice(), [Action::Play(_)]), "{played:?}");
+            assert!(
+                !seen.contains(&album.uri),
+                "{} came twice in a round",
+                album.uri
+            );
+            seen.push(album.uri.clone());
+            let album = album.clone();
+            app.send(Event::AlbumPicked {
+                album,
+                result: Ok(nevermind_tracks()),
+            });
             assert!(app.state.picked_changed().is_some());
         }
         // A new round, without the playing album first
         let playing = seen.last().unwrap().clone();
         let actions = app.send(Event::Pick(PickFrom::Shelf));
-        assert!(!matches!(actions.as_slice(), [Action::LoadAlbumTracks(uri)] if *uri == playing));
+        assert!(!matches!(actions.as_slice(), [Action::PickAlbum(a)] if a.uri == playing));
         // Nothing in Curated to pick from
         assert!(app.send(Event::Pick(PickFrom::Curated)).is_empty());
         assert!(app.state.error.is_some());
+    }
+
+    #[test]
+    fn picked_album_goes_whole_to_the_front_of_the_queue_and_plays() {
+        let mut app = nevermind_playing(0);
+        queue_bleach(&mut app);
+        let actions = app.send(Event::AlbumPicked {
+            album: nevermind(),
+            result: Ok(nevermind_tracks()),
+        });
+        assert_eq!(actions, [play_track("Smells Like Teen Spirit")]);
+        assert_eq!(
+            queue_names(&app),
+            [
+                "In Bloom",
+                "Come As You Are",
+                "Breed",
+                "Blew",
+                "Floyd The Barber"
+            ]
+        );
+        assert!(app.state.now_playing_info(app.now).unwrap().queued);
+
+        // With nothing playing, it starts all the same
+        let mut app = shelf_app();
+        let actions = app.send(Event::AlbumPicked {
+            album: nevermind(),
+            result: Ok(nevermind_tracks()),
+        });
+        assert_eq!(actions, [play_track("Smells Like Teen Spirit")]);
+        assert_eq!(queue_names(&app), ["In Bloom", "Come As You Are", "Breed"]);
     }
 
     #[test]

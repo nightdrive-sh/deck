@@ -609,6 +609,16 @@ impl Deck {
                     }
                 });
             }
+            Action::PickAlbum(album) => {
+                let catalog = self.catalog.clone();
+                self.spawn(async move {
+                    let result = catalog
+                        .album_tracks(&album.id)
+                        .await
+                        .map_err(failed("could not play the picked album"));
+                    app::Event::AlbumPicked { album, result }
+                });
+            }
             Action::QueueRemote { album: uri, track } => {
                 let catalog = self.catalog.clone();
                 self.spawn(async move {
