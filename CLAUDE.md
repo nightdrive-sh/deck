@@ -26,6 +26,13 @@ All four must pass before a commit.
 - Spotify blocks the whole app for hours after too many Web API requests (429). Do not
   write loops or experiments that call the Web API repeatedly.
 
+## Releases
+
+A release is `version` in `Cargo.toml` and a tag `vX.Y.Z`. Nightdrive installs Deck as the
+`deck` package from its COPR (`@nightdrive/nightdrive`), so once the tag is pushed, bump
+`deck/deck.spec` in nightdrive-packages (`Version`, `Release: 1`, a `%changelog` entry)
+and push that: COPR builds the new package, and Nightdrive's System update installs it.
+
 ## Architecture
 
 - **`app`**: all state and logic. `State::update(Event, Instant) -> Vec<Action>` is pure:
