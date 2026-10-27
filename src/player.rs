@@ -30,7 +30,7 @@ use librespot_core::{
 };
 use librespot_metadata::audio::{UniqueFields, item::CoverImage};
 use librespot_playback::{
-    audio_backend::{self, SinkBuilder},
+    audio_backend::SinkBuilder,
     config::{AudioFormat, Bitrate, PlayerConfig},
     mixer::NoOpVolume,
     player::{Player as Librespot, PlayerEvent, PlayerEventChannel},
@@ -42,13 +42,18 @@ use tokio::sync::{
 
 use crate::{catalog::Catalog, config};
 
-/// The audio output. On Linux ALSA (through PipeWire or PulseAudio's ALSA plugin), which
-/// closes the device when playback stops: rodio, the default, keeps it open and feeding
-/// silence, which costs CPU the whole time Deck is open.
+/// The audio output. On Linux Deck's own ALSA sink (`sink`), which closes the device when
+/// playback stops: rodio, librespot's default, keeps it open and feeding silence, which
+/// costs CPU the whole time Deck is open.
 #[cfg(target_os = "linux")]
-const BACKEND: Option<&str> = Some("alsa");
+fn audio_output() -> SinkBuilder {
+    crate::sink::open
+}
+
 #[cfg(not(target_os = "linux"))]
-const BACKEND: Option<&str> = None;
+fn audio_output() -> SinkBuilder {
+    librespot_playback::audio_backend::find(None).expect("no audio backend compiled in")
+}
 
 /// librespot's sign-in is only used for playback: search and likes go through the Web
 /// API with their own token (`catalog`).
@@ -202,9 +207,7 @@ impl Player {
         let (commands, command_rx) = mpsc::unbounded_channel();
         let (events, event_rx) = mpsc::unbounded_channel();
 
-        let backend = audio_backend::find(BACKEND.map(String::from))
-            .or_else(|| audio_backend::find(None))
-            .expect("no audio backend compiled in");
+        let backend = audio_output();
         let librespot = new_librespot(session.clone(), backend, bitrate);
         let player_events = librespot.get_player_event_channel();
 

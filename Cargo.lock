@@ -862,6 +862,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 name = "deck"
 version = "0.1.0"
 dependencies = [
+ "alsa 0.10.0",
  "anyhow",
  "block2",
  "directories",
@@ -2202,7 +2203,6 @@ version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88258620bf3e6808ea1fadd11639648d77c06280b9f5a4c9d14ea79f6f998af6"
 dependencies = [
- "alsa 0.10.0",
  "cpal",
  "form_urlencoded",
  "futures-util",

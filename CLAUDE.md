@@ -62,7 +62,9 @@ Other modules:
 | `curate_run` | `deck curate`: the Curated run, which starts Claude Code with `curate/prompt.md` and logs to `~/.cache/deck/curate.log` |
 | `lastfm` | Last.fm API |
 | `playback` | Playback state across restarts (`~/.local/state/deck/playback.json`) |
-| `now_playing` | macOS Now Playing and media keys, run in a helper process |
+| `now_playing` | macOS Now Playing and media keys, run in a helper process (Linux: MPRIS, the control socket and the state file), started again if it ends |
+| `instance` | One Deck at a time on Linux: the lock `$XDG_RUNTIME_DIR/deck/deck.lock`, held from the start |
+| `sink` | The ALSA output on Linux, whose stop gives up on a device that never finishes playing out (PipeWire) |
 | `config` | `~/.config/deck/config.toml`, directory paths and the shared OAuth client |
 | `rate_limit` | Spotify's 429 block shared by all Deck processes (`~/.cache/deck/rate-limit.json`) |
 | `store` | Atomic JSON read and write shared by the modules that keep files |

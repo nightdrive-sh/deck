@@ -27,6 +27,7 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::PathBuf,
     process::{Child, ChildStdin, Stdio},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -35,6 +36,10 @@ use serde::{Deserialize, Serialize};
 
 /// How far the position may drift from the predicted one before it is sent again.
 const DRIFT: Duration = Duration::from_secs(2);
+
+/// A helper that ended is started again no sooner than this after its last start, so one
+/// that dies at once doesn't spin.
+const HELPER_RETRY: Duration = Duration::from_secs(5);
 
 /// A failed cover image download is retried no sooner than this (with the next
 /// update), so that while the network is down, not every update waits for the
@@ -306,43 +311,38 @@ fn genre_id(id: &str) -> Option<String> {
     (!id.is_empty() && !id.contains(char::is_whitespace)).then(|| id.to_owned())
 }
 
+/// What the helper passes on: the keys and `deck ctl` commands.
+type OnControl = Arc<dyn Fn(Control) + Send + Sync>;
+
 /// Deck's side: the helper process that is told the playing track and sends the keys.
 pub struct Session {
     child: Child,
     stdin: Option<ChildStdin>,
     /// The info sent last, and when it was sent.
     sent: Option<(Option<Info>, Instant)>,
+    on_control: OnControl,
+    /// When the helper was started last (`HELPER_RETRY`).
+    started: Instant,
 }
 
 impl Session {
     /// Starts the helper process (`deck now-playing`). Keys are read in a thread of
     /// their own and passed to `on_command`.
-    pub fn start(on_control: impl Fn(Control) + Send + 'static) -> Result<Self> {
-        let exe = std::env::current_exe().context("cannot find the deck executable")?;
-        let mut child = std::process::Command::new(exe)
-            .arg("now-playing")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .context("cannot start now-playing")?;
-        let stdout = child.stdout.take().context("now-playing has no stdout")?;
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(control) = Control::parse(&line) {
-                    on_control(control);
-                }
-            }
-        });
+    pub fn start(on_control: impl Fn(Control) + Send + Sync + 'static) -> Result<Self> {
+        let on_control: OnControl = Arc::new(on_control);
+        let (child, stdin) = spawn_helper(on_control.clone())?;
         Ok(Self {
-            stdin: child.stdin.take(),
+            stdin,
             child,
             sent: None,
+            on_control,
+            started: Instant::now(),
         })
     }
 
     /// Reports the playing track (`None`: nothing is playing) if it has changed.
     pub fn update(&mut self, info: Option<Info>, now: Instant) {
+        self.restart_if_gone(now);
         if !changed(self.sent.as_ref(), info.as_ref(), now) {
             return;
         }
@@ -357,6 +357,58 @@ impl Session {
         }
         self.sent = Some((info, now));
     }
+
+    /// Starts the helper again if it has ended (killed, or crashed) while Deck plays on.
+    /// Without it nothing reaches Deck: on Linux its control socket and state file go
+    /// with it, so the media keys and a window can't, and a window takes Deck for gone
+    /// and starts another.
+    fn restart_if_gone(&mut self, now: Instant) {
+        let ended = matches!(self.child.try_wait(), Ok(Some(_)));
+        if !(ended || self.stdin.is_none())
+            || now.saturating_duration_since(self.started) < HELPER_RETRY
+        {
+            return;
+        }
+        self.started = now;
+        if !ended {
+            // Alive but no longer listening (a write failed): replaced.
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+        match spawn_helper(self.on_control.clone()) {
+            Ok((child, stdin)) => {
+                log::warn!("now-playing had ended: started again");
+                self.child = child;
+                self.stdin = stdin;
+                // The new helper knows nothing yet.
+                self.sent = None;
+            }
+            Err(e) => log::warn!("{e:#}"),
+        }
+    }
+}
+
+/// Starts `deck now-playing`, whose stdout lines (keys and commands) go to `on_control`
+/// from a thread of their own.
+fn spawn_helper(on_control: OnControl) -> Result<(Child, Option<ChildStdin>)> {
+    let exe = std::env::current_exe().context("cannot find the deck executable")?;
+    let mut child = std::process::Command::new(exe)
+        .arg("now-playing")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("cannot start now-playing")?;
+    let stdout = child.stdout.take().context("now-playing has no stdout")?;
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if let Some(control) = Control::parse(&line) {
+                on_control(control);
+            }
+        }
+    });
+    let stdin = child.stdin.take();
+    Ok((child, stdin))
 }
 
 impl Drop for Session {
@@ -367,7 +419,7 @@ impl Drop for Session {
         let _ = self.child.wait();
         // The killed helper could not clean up: a socket left behind would look like a running Deck.
         #[cfg(target_os = "linux")]
-        linux::remove_files();
+        linux::remove_files_of(self.child.id());
     }
 }
 
@@ -442,7 +494,7 @@ pub fn running() -> bool {
 }
 
 #[cfg(target_os = "linux")]
-pub use linux::serve;
+pub use linux::{runtime_dir, serve};
 
 #[cfg(target_os = "linux")]
 mod linux {
@@ -465,8 +517,9 @@ mod linux {
 
     use super::{Command, Control, Info};
 
-    /// `$XDG_RUNTIME_DIR/deck`: the control socket and the state file live here.
-    fn runtime_dir() -> PathBuf {
+    /// `$XDG_RUNTIME_DIR/deck`: the control socket, the state file and the lock (`instance`)
+    /// live here.
+    pub fn runtime_dir() -> PathBuf {
         std::env::var_os("XDG_RUNTIME_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(std::env::temp_dir)
@@ -491,6 +544,11 @@ mod linux {
     /// `deck now-playing` on Linux: registers the MPRIS player, serves the control
     /// socket and writes the state file. Info arrives on stdin; commands go to stdout.
     pub fn serve() -> Result<()> {
+        // A socket that answers is another Deck's: taking it over would leave that one out
+        // of reach.
+        if super::running() {
+            anyhow::bail!("another Deck answers on {}", socket_path().display());
+        }
         let dir = runtime_dir();
         std::fs::create_dir_all(&dir).context("cannot create the runtime directory")?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
@@ -528,7 +586,7 @@ mod linux {
             })
             .map_err(|e| anyhow::anyhow!("cannot attach the MPRIS handler: {e:?}"))?;
 
-        // `deck ctl` commands.
+        // `deck ctl` commands. One that doesn't answer is left behind by a killed helper.
         let _ = std::fs::remove_file(socket_path());
         let listener =
             UnixListener::bind(socket_path()).context("cannot open the control socket")?;
@@ -554,14 +612,21 @@ mod linux {
             apply(&mut controls, info.as_ref());
             write_state(info.as_ref());
         }
-        remove_files();
+        remove_files_of(std::process::id());
         Ok(())
     }
 
-    /// Removes the control socket and the state file.
-    pub(super) fn remove_files() {
-        let _ = std::fs::remove_file(socket_path());
-        let _ = std::fs::remove_file(state_path());
+    /// Removes the control socket and the state file if they are the helper `pid`'s (the
+    /// state file names it): another helper's, which took them over, stay.
+    pub(super) fn remove_files_of(pid: u32) {
+        let owner = std::fs::read(state_path())
+            .ok()
+            .and_then(|json| serde_json::from_slice::<serde_json::Value>(&json).ok())
+            .and_then(|state| state["pid"].as_u64());
+        if owner == Some(u64::from(pid)) {
+            let _ = std::fs::remove_file(socket_path());
+            let _ = std::fs::remove_file(state_path());
+        }
     }
 
     fn apply(controls: &mut MediaControls, info: Option<&Info>) {

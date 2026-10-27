@@ -6,6 +6,7 @@ mod curate_run;
 mod genre_cli;
 mod genres;
 mod history;
+mod instance;
 mod lastfm;
 mod listened;
 mod lists;
@@ -16,6 +17,8 @@ mod player;
 mod radio;
 mod rate_limit;
 mod shelf;
+#[cfg(target_os = "linux")]
+mod sink;
 mod store;
 mod ui;
 
@@ -50,6 +53,9 @@ use crate::{
 /// Tick interval: must be shorter than `app::SEARCH_DEBOUNCE`. The tick also redraws
 /// the elapsed time and the progress bar.
 const TICK: Duration = Duration::from_millis(100);
+
+/// How long Deck waits for its threads to end when it quits, before it exits without them.
+const SHUTDOWN_LIMIT: Duration = Duration::from_secs(2);
 
 const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-run] \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
@@ -192,7 +198,13 @@ fn main() -> ExitCode {
     } else {
         tokio::runtime::Runtime::new()
             .map_err(anyhow::Error::from)
-            .and_then(|runtime| runtime.block_on(run_mode(mode)))
+            .and_then(|runtime| {
+                let outcome = runtime.block_on(run_mode(mode));
+                // librespot joins its player thread when its task is dropped, and a thread
+                // stuck in the audio device would hold the exit forever (`SHUTDOWN_LIMIT`).
+                runtime.shutdown_timeout(SHUTDOWN_LIMIT);
+                outcome
+            })
     };
     match outcome {
         Ok(()) => ExitCode::SUCCESS,
@@ -253,11 +265,14 @@ fn now_playing() -> Result<()> {
 
 async fn run_mode(mode: Mode) -> Result<()> {
     match mode {
+        // The lock first: a Deck that is already running keeps its log.
         Mode::Deck | Mode::Tui => {
+            let _lock = instance::lock()?;
             init_logging();
             run(false).await
         }
         Mode::Serve => {
+            let _lock = instance::lock()?;
             init_logging();
             run(true).await
         }
