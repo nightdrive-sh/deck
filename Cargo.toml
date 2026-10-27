@@ -1,6 +1,6 @@
 [package]
 name = "deck"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A minimal Spotify player for the terminal, built around your own album shelf and a weekly AI-curated album list"
 license = "MIT"
