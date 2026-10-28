@@ -321,6 +321,10 @@ when one of its tracks has played halfway, playing it again within a few hours o
 For desktop launchers, `deck search --json <query>` (artists, albums and songs, each song with
 its album), `deck artist-albums --json <artist id>` and `deck album-tracks --json <spotify:album:…>`
 (the album and its tracks) print JSON without a running Deck (they need `client_id`).
+`deck status --json` prints what the running Deck plays, from the state file and without Spotify: `running`
+(false, and nothing else, when no Deck runs), `playing`, the track's `title`, `artist`, `album`, `track_uri` and
+`album_uri`, `position_ms` now and `duration_ms`, `liked`, `queued`, the `queue`, the radio's `genre` and `name`
+(`radio`) and `error`.
 
 `deck serve` (Linux) plays without the screen, for a window of your own: it takes the
 commands above and keeps the state file up to date, and SIGTERM, Ctrl+C or `deck ctl quit`

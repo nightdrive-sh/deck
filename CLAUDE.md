@@ -42,7 +42,7 @@ and push that: COPR builds the new package, and Nightdrive's System update insta
 - **`main`**: the event loop and all IO. It reads keys and player events, calls
   `State::update`, carries out each `Action` (often in a tokio task that sends the result
   back as an `Event`) and draws. It also parses the subcommands (`deck taste`,
-  `deck curate`, `deck curate submit`, `deck genre …`, and the internal
+  `deck curate`, `deck curate submit`, `deck genre …`, `deck status --json`, and the internal
   `deck now-playing`).
 - **`ui`**: draws the state with ratatui. No logic: decisions belong in `app`. The key
   help rows are in `key_help`.
@@ -63,6 +63,7 @@ Other modules:
 | `lastfm` | Last.fm API |
 | `playback` | Playback state across restarts (`~/.local/state/deck/playback.json`) |
 | `now_playing` | macOS Now Playing and media keys, run in a helper process (Linux: MPRIS, the control socket and the state file), started again if it ends |
+| `status` | `deck status --json`: what the running Deck plays, from the state file (Linux) |
 | `instance` | One Deck at a time on Linux: the lock `$XDG_RUNTIME_DIR/deck/deck.lock`, held from the start |
 | `sink` | The ALSA output on Linux, whose stop gives up on a device that never finishes playing out (PipeWire) |
 | `config` | `~/.config/deck/config.toml`, directory paths and the shared OAuth client |

@@ -19,6 +19,7 @@ mod rate_limit;
 mod shelf;
 #[cfg(target_os = "linux")]
 mod sink;
+mod status;
 mod store;
 mod ui;
 
@@ -68,7 +69,7 @@ const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-ru
                      | ctl favorite-add <genre id> | ctl favorite-remove <genre id> \
                      | ctl curated-reject <uri> \
                      | ctl search <query> | ctl restore <file> \
-                     | search --json <query> | artist-albums --json <artist id> \
+                     | status --json | search --json <query> | artist-albums --json <artist id> \
                      | album-tracks --json <album uri> \
                      | --help | --version]";
 
@@ -95,6 +96,8 @@ enum Mode {
     NowPlaying,
     /// `deck ctl <command>`: tells the running Deck what to do (Linux).
     Ctl(now_playing::Control),
+    /// `deck status --json`: what the running Deck plays, as JSON (`status`).
+    StatusJson,
     /// `deck search --json <query>`: artists and albums as JSON, for desktop launchers.
     SearchJson(String),
     /// `deck artist-albums --json <artist id>`: the artist's albums as JSON.
@@ -139,6 +142,7 @@ impl Mode {
             ["genre", "prompt"] => Ok(Self::Genre(GenreCommand::Prompt)),
             ["now-playing"] => Ok(Self::NowPlaying),
             ["serve"] => Ok(Self::Serve),
+            ["status", "--json"] => Ok(Self::StatusJson),
             ["search", "--json", query @ ..] if !query.is_empty() => {
                 Ok(Self::SearchJson(query.join(" ")))
             }
@@ -180,6 +184,15 @@ fn main() -> ExitCode {
             if let Some(window) = desktop_window() {
                 return open_window(&window);
             }
+        }
+        Mode::StatusJson => {
+            return match status::print() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("deck: {e:#}");
+                    ExitCode::FAILURE
+                }
+            };
         }
         Mode::Ctl(command) => {
             return match now_playing::send_control(command) {
@@ -355,7 +368,7 @@ async fn run_mode(mode: Mode) -> Result<()> {
         }
         Mode::NowPlaying => now_playing(),
         // Already handled in `main` before tokio.
-        Mode::Help | Mode::Version | Mode::Ctl(_) => Ok(()),
+        Mode::Help | Mode::Version | Mode::Ctl(_) | Mode::StatusJson => Ok(()),
     }
 }
 
@@ -1194,6 +1207,8 @@ mod tests {
         assert_eq!(mode(&["taste"]), Some(Mode::Taste));
         assert_eq!(mode(&["curate"]), Some(Mode::Curate));
         assert_eq!(mode(&["now-playing"]), Some(Mode::NowPlaying));
+        assert_eq!(mode(&["status", "--json"]), Some(Mode::StatusJson));
+        assert_eq!(mode(&["status"]), None);
         assert_eq!(
             mode(&["ctl", "like"]),
             Some(Mode::Ctl(now_playing::Control::Media(
