@@ -167,6 +167,9 @@ pub enum Control {
     /// A copy of `playback.json`, by its absolute path: the running Deck may have another
     /// working directory than the command that asks.
     Restore(PathBuf),
+    /// Write the playback state, with the position now, to this file (absolute, as for
+    /// `Restore`), for going back to it later (`deck ctl save <file>`).
+    Save(PathBuf),
     /// Add the album to the end of the queue (`deck ctl queue-album <uri>`).
     QueueAlbum(String),
     /// Add one track of the album to the end of the queue (`deck ctl queue-song <track> <album>`).
@@ -266,6 +269,10 @@ impl Control {
             let path = PathBuf::from(path.trim());
             return path.is_absolute().then_some(Self::Restore(path));
         }
+        if let Some(path) = line.strip_prefix("save ") {
+            let path = PathBuf::from(path.trim());
+            return path.is_absolute().then_some(Self::Save(path));
+        }
         if let Some(query) = line.strip_prefix("search ") {
             let query = query.trim();
             return (!query.is_empty()).then(|| Self::Search(query.to_owned()));
@@ -282,6 +289,7 @@ impl Control {
             // One line on the wire: a pasted newline must not split the query.
             Self::Search(query) => format!("search {}", query.replace(['\n', '\r'], " ")),
             Self::Restore(path) => format!("restore {}", path.display()),
+            Self::Save(path) => format!("save {}", path.display()),
             Self::QueueAlbum(uri) => format!("queue-album {uri}"),
             Self::QueueSong { track, album } => format!("queue-song {track} {album}"),
             Self::Unqueue(index) => format!("unqueue {index}"),
@@ -964,6 +972,10 @@ mod tests {
             Some(restore)
         );
         assert_eq!(Control::parse("restore playback.json"), None);
+        let save = Control::Save(PathBuf::from("/tmp/undo.json"));
+        assert_eq!(save.line(), "save /tmp/undo.json");
+        assert_eq!(Control::parse(&save.line()), Some(save));
+        assert_eq!(Control::parse("save undo.json"), None);
         assert_eq!(Control::parse("restore "), None);
         let window = [
             Control::QueueAlbum("spotify:album:a".to_owned()),

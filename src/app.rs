@@ -44,6 +44,7 @@
 use std::{
     cell::Cell,
     collections::{HashMap, HashSet},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -184,6 +185,12 @@ pub enum Event {
     CuratedChanged(Option<AlbumList>),
     /// The previous session's playback state, read at startup.
     Restore(Box<SavedPlayback>),
+    /// A copy of the playback state to go back to (`deck ctl restore <file>`): as `Restore`,
+    /// and then saved, since Deck's own file still holds what played before.
+    RestoreCopy(Box<SavedPlayback>),
+    /// Write the playback state, with the position now, to this file (`deck ctl save <file>`),
+    /// e.g. for an undo that goes back to it with `deck ctl restore`.
+    SavePlayback(PathBuf),
     /// Result of `Action::LoadRadio`: the station's page as is.
     RadioLoaded {
         request: RadioRequest,
@@ -265,6 +272,11 @@ pub enum Action {
     SetLiked {
         uri: String,
         liked: bool,
+    },
+    /// Write the playback state to this file (`Event::SavePlayback`); `None` removes it.
+    SavePlayback {
+        path: PathBuf,
+        playback: Option<Box<SavedPlayback>>,
     },
     Quit,
 }
@@ -1011,6 +1023,17 @@ impl State {
                 Vec::new()
             }
             Event::Restore(saved) => self.restore(*saved, now),
+            Event::RestoreCopy(saved) => {
+                let actions = self.restore(*saved, now);
+                // restore() counts the state as saved, as it is at startup; this one isn't yet.
+                self.saved = None;
+                self.playback_dirty = true;
+                actions
+            }
+            Event::SavePlayback(path) => vec![Action::SavePlayback {
+                path,
+                playback: self.playback(now).map(Box::new),
+            }],
             Event::RadioLoaded { request, result } => self.radio_loaded(request, result),
             Event::RadioAlbum(Ok(album)) if !self.on_shelf(&album.uri) => {
                 vec![Action::AddToShelf(album)]
@@ -5180,6 +5203,28 @@ mod tests {
         let mut app = shelf_app();
         let actions = app.send(Event::Restore(Box::new(saved)));
         (app, actions)
+    }
+
+    #[test]
+    fn save_playback_writes_the_state_with_the_position_now() {
+        let mut app = in_bloom_with_queue();
+        let path = PathBuf::from("/tmp/undo.json");
+        let actions = app.send(Event::SavePlayback(path.clone()));
+        let playback = app.state.playback(app.now).map(Box::new);
+        assert_eq!(playback.as_ref().unwrap().position, Duration::from_secs(83));
+        assert_eq!(actions, [Action::SavePlayback { path, playback }]);
+    }
+
+    #[test]
+    fn a_restored_copy_is_saved_but_the_start_s_restore_is_not() {
+        let mut app = in_bloom_with_queue();
+        let saved = quit(&mut app);
+        let (mut started, _) = restored(saved.clone());
+        assert!(!started.state.playback_changed());
+        let mut copied = shelf_app();
+        copied.send(Event::RestoreCopy(Box::new(saved)));
+        assert!(copied.state.playback_changed());
+        assert!(!copied.state.playback_changed());
     }
 
     #[test]

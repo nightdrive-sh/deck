@@ -303,8 +303,10 @@ On Linux the same helper registers Deck as the MPRIS player "Deck", so media key
 - `deck ctl quit` saves what is playing and quits, as `q` does.
 - `deck ctl restore <file>` goes back to a saved playback state: a copy of
   `~/.local/state/deck/playback.json`, by its absolute path. The album or radio, the track, the position and the
-  queue come back as when Deck starts, paused; `deck ctl play` goes on. A script can keep the file before it plays
-  something else and put things back after.
+  queue come back as when Deck starts, paused; `deck ctl play` goes on, and Deck saves it as what plays.
+- `deck ctl save <file>` writes the running Deck's playback state, with the position now, to that file (an absolute
+  path) in the same form, a moment later. A script can save it before it plays something else, and put things back
+  after with `deck ctl restore`.
 
 The state file also has the playing track's and album's URIs (`track_uri`, `album_uri`), whether the
 track came from the queue (`queued`),

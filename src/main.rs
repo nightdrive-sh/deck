@@ -68,7 +68,7 @@ const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-ru
                      | ctl seek <ms> | ctl radio <genre id> \
                      | ctl favorite-add <genre id> | ctl favorite-remove <genre id> \
                      | ctl curated-reject <uri> \
-                     | ctl search <query> | ctl restore <file> \
+                     | ctl search <query> | ctl save <file> | ctl restore <file> \
                      | status --json | search --json <query> | artist-albums --json <artist id> \
                      | album-tracks --json <album uri> \
                      | --help | --version]";
@@ -593,8 +593,9 @@ fn start_now_playing(results: &UnboundedSender<app::Event>) -> Option<now_playin
             now_playing::Control::RejectCurated(uri) => app::Event::RejectCurated(uri),
             now_playing::Control::Quit => app::Event::Quit,
             // The same as the start's own restore: paused at the saved position, with the queue
+            now_playing::Control::Save(path) => app::Event::SavePlayback(path),
             now_playing::Control::Restore(path) => match PlaybackFile::at(path).load() {
-                Ok(Some(saved)) => app::Event::Restore(Box::new(saved)),
+                Ok(Some(saved)) => app::Event::RestoreCopy(Box::new(saved)),
                 Ok(None) => return log::warn!("deck ctl restore: no such file"),
                 Err(e) => return log::warn!("deck ctl restore: {e:#}"),
             },
@@ -800,6 +801,11 @@ impl Deck {
                         .map_err(failed("could not change Liked Songs"));
                     app::Event::LikeChanged { uri, liked, result }
                 });
+            }
+            Action::SavePlayback { path, playback } => {
+                if let Err(e) = PlaybackFile::at(path).save(playback.as_deref()) {
+                    log::warn!("deck ctl save: {e:#}");
+                }
             }
             Action::Quit => {}
         }
