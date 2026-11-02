@@ -1,6 +1,7 @@
 //! Tests: likes (Liked Songs).
 
 use super::*;
+use crate::app::likes::LIKES_NEED_APP;
 
 fn like_changed(name: &str, liked: bool, result: Result<(), String>) -> Event {
     Event::LikeChanged {
