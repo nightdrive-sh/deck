@@ -1,5 +1,7 @@
 //! Tests: now playing, errors, and saving and restoring playback.
 
+use std::path::PathBuf;
+
 use super::*;
 
 fn track_changed() -> Event {
