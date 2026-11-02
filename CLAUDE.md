@@ -39,13 +39,22 @@ and push that: COPR builds the new package, and Nightdrive's System update insta
   it changes the state and returns what should happen (play, search, save the shelf…),
   but does no IO itself. Events are key presses, player events, results of earlier
   actions and ticks. Nearly all behaviour is tested through `update`.
+  `src/app.rs` holds the data model, `State::new` and `update`; `State`'s methods are
+  split by topic into `src/app/` (`event`, `view`, `keys`, `open`, `play`, `station` for
+  the genre radio, `playing` for player events, media keys and `deck ctl`, `results`,
+  `likes`, `saved`, `query` for what `ui` reads). A method another part of `app` calls is
+  `pub(super)`. Its tests are in `src/app/tests/`, one file per topic, with the shared
+  fixtures in `src/app/tests.rs`.
 - **`main`**: the event loop and all IO. It reads keys and player events, calls
   `State::update`, carries out each `Action` (often in a tokio task that sends the result
   back as an `Event`) and draws. It also parses the subcommands (`deck taste`,
   `deck curate`, `deck curate submit`, `deck genre …`, `deck status --json`, and the internal
   `deck now-playing`).
-- **`ui`**: draws the state with ratatui. No logic: decisions belong in `app`. The key
-  help rows are in `key_help`.
+- **`ui`**: draws the state with ratatui. No logic: decisions belong in `app`. `src/ui.rs`
+  is the layout, the top rows and the colours; the views are in `src/ui/home.rs` (shelf,
+  Genres, Curated) and `src/ui/views.rs`, the shared list and text helpers in
+  `src/ui/list.rs`, the key help rows in `src/ui/key_help.rs`, and the tests in
+  `src/ui/tests/` as in `app`.
 
 Other modules:
 
@@ -97,6 +106,7 @@ Curated is built outside the app: `deck curate` runs Claude Code with `curate/pr
   ~200–400 lines. Past ~600, split off what stands on its own (a submodule, a widget);
   past ~800 it must be split. Plan a new feature in small files from the start.
 - Match the surrounding code: small functions, `anyhow` errors with context
-  (`cannot open <path>`), and tests next to the code in `mod tests`.
+  (`cannot open <path>`), and tests next to the code in `mod tests` (in `app` and `ui`,
+  in their `tests/` folder by topic).
 - Update `README.md` when keys, commands, files or setup change. The key table in the
   README must match `key_help` and the key handling in `app`.
