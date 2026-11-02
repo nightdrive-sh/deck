@@ -1,6 +1,7 @@
 //! Tests: genres and radio.
 
 use super::*;
+use crate::ui::list::first_visible;
 
 #[test]
 fn shelf_shows_favorite_genres_and_genres_row() {
