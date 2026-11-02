@@ -1,6 +1,7 @@
 //! Tests: radio continuing by itself, its history and restore.
 
 use super::*;
+use crate::app::station::RADIO_HISTORY;
 
 #[test]
 fn radio_continues_by_itself_past_the_first_page() {
