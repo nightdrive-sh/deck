@@ -228,17 +228,24 @@ pub(super) fn curated(
     }
 }
 
-/// "Artist · Album  1974 ●": names are truncated so that the year and the shelf mark
-/// show. The artist is truncated only if not even the start of the album would show
-/// otherwise.
+/// "Artist · Album  1974 ●", and the rough genre ("jazz", "rock, psych") dimmed at the
+/// right edge, so the list can be skimmed by genre. Names are truncated so that the year, the shelf mark and
+/// the genre show. The artist is truncated only if not even the start of the album would
+/// show otherwise.
 fn list_album_row(state: &State, entry: &ListAlbum, width: usize) -> Line<'static> {
     let album = &entry.album;
     let year = album
         .year
         .map(|year| format!("  {year}"))
         .unwrap_or_default();
+    let genre = entry.genres.join(", ");
     let on_shelf = state.on_shelf(&album.uri);
-    let fixed = year.width() + if on_shelf { 2 } else { 0 };
+    let genre_room = if genre.is_empty() {
+        0
+    } else {
+        genre.width() + 2
+    };
+    let fixed = year.width() + if on_shelf { 2 } else { 0 } + genre_room;
     let room = width.saturating_sub(fixed);
     let album_start = album.name.width().min(6);
     let artist_room = (room / 2).max(room.saturating_sub(3 + album_start));
@@ -252,5 +259,8 @@ fn list_album_row(state: &State, entry: &ListAlbum, width: usize) -> Line<'stati
     spans.push(year.fg(MUTED));
     let mut line = Line::from(spans);
     shelf_mark(&mut line, state, album);
-    line
+    if genre.is_empty() {
+        return line;
+    }
+    spread(line.spans, vec![genre.fg(MUTED)], width)
 }

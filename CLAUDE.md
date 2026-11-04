@@ -47,7 +47,8 @@ and push that: COPR builds the new package, and Nightdrive's System update insta
   fixtures in `src/app/tests.rs`.
 - **`main`** and its helpers: the event loop and all IO. `src/main.rs` is the module list,
   `main` and the subcommands' dispatch (`deck taste`, `deck curate`, `deck curate submit`,
-  `deck genre …`, `deck status --json`, `deck ctl`, and the internal `deck now-playing`);
+  `deck curate genres`, `deck genre …`, `deck status --json`, `deck ctl`, and the
+  internal `deck now-playing`);
   `cli` parses the command line (`Mode`, the usage). `event_loop` signs in, reads keys and
   player events, calls `State::update` and draws; `deck` (`Deck`) carries out each
   `Action` (often in a tokio task that sends the result back as an `Event`); `logging` is
@@ -69,10 +70,11 @@ re-exported, and its tests in `src/<module>/tests.rs` or, by topic, `tests/`):
 | `genres` | The built-in genre catalog (`genres/genres.json`, compiled in); favourites and the user's own genres in `src/genres/` (`favorites`, `my_genres`) |
 | `genre_cli` | `deck genre add / remove / list / prompt`; the seed check in `src/genre_cli/check.rs` (Spotify behind a trait), the real Spotify in `live.rs` |
 | `shelf` | The album shelf (`~/.config/deck/shelf.json`); the order of artists and albums in `src/shelf/sort.rs` |
-| `lists` | The Curated list and its history |
-| `curate` | `deck curate submit` and its check rules, used by the weekly Curated run; `deck taste` in `src/curate/taste.rs`, the searches with their cache, budget and 429 block in `search.rs` |
+| `lists` | The Curated list and its history (tests in `src/lists/tests.rs`) |
+| `curate` | `deck curate submit` and its check rules, used by the weekly Curated run; `deck taste` in `src/curate/taste.rs`, the searches with their cache, budget and 429 block in `search.rs`, the albums' rough genres and `deck curate genres` in `genres.rs` |
+| `coarse_genre` | A genre list (the curator's, Last.fm tags) reduced to one to three coarse words for a Curated row |
 | `curate_run` | `deck curate`: the Curated run, which starts Claude Code with `curate/prompt.md` and logs to `~/.cache/deck/curate.log` |
-| `lastfm` | Last.fm API |
+| `lastfm` | Last.fm API; artists' tags in `src/lastfm/tags.rs` |
 | `playback` | Playback state across restarts (`~/.local/state/deck/playback.json`) |
 | `now_playing` | macOS Now Playing and media keys, run in a helper process (Linux: MPRIS, the control socket and the state file), started again if it ends. `src/now_playing/`: `control` (`deck ctl`'s commands and their line form), `linux`, `mac` |
 | `status` | `deck status --json`: what the running Deck plays, from the state file (Linux) |

@@ -30,6 +30,30 @@ fn accepts_matching_album_with_reason() {
 }
 
 #[test]
+fn the_curators_genre_becomes_coarse_words() {
+    let mut fine = candidate("Gene Clark", "No Other");
+    fine.genre = "folk rock, cosmic country".to_owned();
+    let mut unknown = candidate("Big Star", "#1 Record");
+    unknown.genre = "sea shanties".to_owned();
+    let (_, albums) = check(
+        &[fine, unknown, candidate("Love", "Forever Changes")],
+        &[
+            Some(no_other()),
+            Some(vec![found("r1", "Big Star", "#1 Record", 1972, "album")]),
+            Some(vec![found("fc", "Love", "Forever Changes", 1967, "album")]),
+        ],
+        &[],
+        &[],
+        &[],
+    );
+    // Folk is narrow enough alone
+    assert_eq!(albums[0].genres, ["folk"]);
+    // A word Deck doesn't know, or none, leaves the album without a genre
+    assert!(albums[1].genres.is_empty());
+    assert!(albums[2].genres.is_empty());
+}
+
+#[test]
 fn not_found_when_no_hit_matches() {
     let report = check_one(Vec::new(), &[], &[], &[]);
     assert_eq!(reasons(&report), [Rejection::NotFound]);

@@ -334,3 +334,37 @@ fn empty_shelf_shows_hint() {
         "The shelf is empty – search for albums with Ctrl+F"
     );
 }
+
+#[test]
+fn curated_rows_end_in_the_rough_genre() {
+    let now = Instant::now();
+    let mut list = curated_list();
+    list.albums[0].genres = vec!["country".into()];
+    list.albums[1].genres = vec!["rock".into(), "power pop".into()];
+    let mut state = State::new(shelf()).with_curated(Ok(Some(list)));
+    state.update(Event::Key(Key::Enter), now);
+    let buffer = render(&state, now, 60, 17);
+    assert_eq!(
+        rows(&buffer)[7..10],
+        [
+            format!("Gene Clark · No Other  1974{}country", " ".repeat(26)),
+            format!(
+                "Big Star · #1 Record  1972{}rock, power pop",
+                " ".repeat(19)
+            ),
+            // No genre, nothing at the end
+            "Foo Fighters · The Colour And The Shape  1997 ●".to_owned(),
+        ]
+    );
+    // A long name gives way to the genre
+    let mut list = curated_list();
+    list.albums[2].genres = vec!["rock".into()];
+    let mut state = State::new(shelf()).with_curated(Ok(Some(list)));
+    state.update(Event::Key(Key::Enter), now);
+    let narrow = render(&state, now, 40, 17);
+    assert!(
+        row(&narrow, 9).ends_with("1997 ●  rock"),
+        "{:?}",
+        row(&narrow, 9)
+    );
+}

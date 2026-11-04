@@ -459,6 +459,7 @@ fn curated(albums: &[Album]) -> AlbumList {
             .map(|album| ListAlbum {
                 album: album.clone(),
                 reason: Some(format!("Because of {}.", album.artist)),
+                genres: Vec::new(),
             })
             .collect(),
     }

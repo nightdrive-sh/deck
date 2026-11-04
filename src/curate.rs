@@ -32,12 +32,14 @@ use crate::{
     store::unix_now,
 };
 
+mod genres;
 mod search;
 mod taste;
 
 pub use search::SearchCache;
 pub use taste::taste;
 
+pub use genres::fill_current as fill_genres;
 use search::lookup;
 use taste::{lastfm_client, load_shelf, played_in_deck};
 
@@ -61,6 +63,10 @@ pub struct Candidate {
     pub album: String,
     #[serde(default)]
     pub reason: String,
+    /// The album's genre in a word or two ("jazz", "soft rock, jazz"), which Deck
+    /// reduces to its coarse words ([`crate::coarse_genre`]).
+    #[serde(default)]
+    pub genre: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -179,6 +185,7 @@ pub fn check(
             None => passed.push(ListAlbum {
                 album,
                 reason: Some(candidate.reason.trim().to_owned()).filter(|r| !r.is_empty()),
+                genres: genres::from_curator(&candidate.genre),
             }),
         }
     }

@@ -1,6 +1,7 @@
 mod app;
 mod catalog;
 mod cli;
+mod coarse_genre;
 mod config;
 mod curate;
 mod curate_run;
@@ -231,6 +232,10 @@ async fn run_mode(mode: Mode) -> Result<()> {
         Mode::CurateSubmit { dry_run } => {
             init_stderr_logging();
             curate::submit(dry_run).await
+        }
+        Mode::CurateGenres => {
+            init_stderr_logging();
+            curate::fill_genres().await
         }
         Mode::Genre(command) => {
             init_stderr_logging();

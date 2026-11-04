@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::store::{read_json, unix_now, write_atomic};
 
+mod tags;
+
 const API: &str = "https://ws.audioscrobbler.com/2.0/";
 /// Age after which the album cache is fetched again.
 const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);

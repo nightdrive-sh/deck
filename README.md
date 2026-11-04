@@ -19,7 +19,8 @@ this record is on the list for _you_ – so choosing what to play next is easy:
 ![Curated: this week's albums, with the selected album's reason at the bottom](docs/curated.jpg)
 
 The reason of the selected album is shown at the bottom, and also above the track list
-when you open the album.
+when you open the album. Each row ends in the album's rough genre (jazz, emo, rock, psych),
+so the list can be skimmed.
 
 The list is based on:
 
@@ -428,7 +429,12 @@ Deck). Claude can only run two Deck commands, write candidate files in
 - `deck curate submit [--dry-run]` reads album candidates with reasons, finds them on
   Spotify and reports which ones are accepted and why others are not (not on Spotify, on
   your shelf, suggested before, already listened to). Without `--dry-run` it saves the
-  list.
+  list. Claude also gives each album a genre, which Deck boils down to one to three
+  coarse words for the list's rows.
+
+A list made before Deck showed genres gets them from the artists' Last.fm tags with
+`deck curate genres` (it needs `lastfm_api_key`). Spotify no longer gives apps the
+artists' genres.
 
 Claude picks about 24 candidates, checks them, replaces the rejected ones and saves the
 best 20. If the run fails, the previous list stays.

@@ -3,7 +3,7 @@
 
 use crate::{genre_cli, now_playing};
 
-pub(super) const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-run] \
+pub(super) const USAGE: &str = "usage: deck [tui | taste | curate | curate submit [--dry-run] | curate genres \
                      | genre add [--dry-run] | genre remove <name> | genre list | genre prompt \
                      | serve \
                      | ctl <toggle|play|pause|next|previous|like|quit> \
@@ -36,6 +36,8 @@ pub(super) enum Mode {
     CurateSubmit {
         dry_run: bool,
     },
+    /// `deck curate genres`: the rough genres into a list that has none yet (`curate`).
+    CurateGenres,
     Genre(GenreCommand),
     /// The Now Playing helper process Deck starts itself (`now_playing`), not in the help.
     NowPlaying,
@@ -78,6 +80,7 @@ impl Mode {
             ["curate"] => Ok(Self::Curate),
             ["curate", "submit"] => Ok(Self::CurateSubmit { dry_run: false }),
             ["curate", "submit", "--dry-run"] => Ok(Self::CurateSubmit { dry_run: true }),
+            ["curate", "genres"] => Ok(Self::CurateGenres),
             ["genre", "add"] => Ok(Self::Genre(GenreCommand::Add { dry_run: false })),
             ["genre", "add", "--dry-run"] => Ok(Self::Genre(GenreCommand::Add { dry_run: true })),
             ["genre", "remove", name @ ..] if !name.is_empty() => {

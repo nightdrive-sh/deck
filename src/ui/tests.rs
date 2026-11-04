@@ -201,6 +201,7 @@ fn curated_list() -> AlbumList {
     let entry = |album: Album, reason: &str| ListAlbum {
         album,
         reason: Some(reason.to_owned()),
+        genres: Vec::new(),
     };
     Curated {
         round: "2026-W41".to_owned(),

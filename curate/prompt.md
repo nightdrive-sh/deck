@@ -40,15 +40,17 @@ in the current directory, Read and WebSearch.
    and a few spares. Each one needs a
    `reason`: one or two sentences in English on why this record suits this taste,
    preferably naming artists they listen to. Write it for them, plainly, without
-   marketing words, and do not start every reason the same way.
+   marketing words, and do not start every reason the same way. Also give a `genre`:
+   the record's genre in a word or two, the most telling first (`"vocal jazz"`,
+   `"shoegaze"`, `"soft rock, jazz"`). Deck shows a coarse form of it on the list.
 
 3. **Check them with a dry run.** Write the list with the Write tool as a JSON file in
    the current directory, then pass the file to `deck curate submit` on stdin:
 
    ```json
    [
-     {"artist": "Gene Clark", "album": "No Other", "reason": "…"},
-     {"artist": "…", "album": "…", "reason": "…"}
+     {"artist": "Gene Clark", "album": "No Other", "reason": "…", "genre": "cosmic country, folk rock"},
+     {"artist": "…", "album": "…", "reason": "…", "genre": "…"}
    ]
    ```
 

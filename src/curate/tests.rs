@@ -28,6 +28,7 @@ fn candidate(artist: &str, album: &str) -> Candidate {
         artist: artist.to_owned(),
         album: album.to_owned(),
         reason: format!("Because {album}."),
+        genre: String::new(),
     }
 }
 
